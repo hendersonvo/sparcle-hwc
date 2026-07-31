@@ -1,0 +1,7 @@
+---
+title: "Step selection function"
+author: "Henderson Vo"
+date: "2026-07-31"
+output: html_document
+---
+
