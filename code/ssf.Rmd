@@ -52,7 +52,7 @@ summarize_sampling_rate(ele_trk)
 ele_trk_reg <- ele_trk |> 
   # nest all data except for id
   nest(data = -id) |> 
-  # for every xyt in data, resample and create steps by burst, and store in column steps
+  # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
       track_resample(rate = hours(1), tolerance = minutes(15)) |>
