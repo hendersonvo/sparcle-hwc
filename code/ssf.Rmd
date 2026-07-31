@@ -5,3 +5,63 @@ date: "2026-07-31"
 output: html_document
 ---
 
+Following the [tutorial](https://cran.r-project.org/web/packages/amt/vignettes/p4_SSF.html) by Johannes Signer.
+
+```{r}
+# -----loading packages-----
+# general use
+library(tidyverse)
+library(janitor)
+library(here)
+
+# spatial
+library(terra)
+library(amt) # ssf
+
+```
+
+```{r}
+# -----loading data-----
+ele_data <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
+```
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 1: Getting the data ready
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```{r}
+# cleaning data
+ele_clean <- ele_data |> 
+  clean_names() |> 
+  mutate(dt = mdy_hm(dt))
+
+# structure tracking data
+ele_trk <- make_track(ele_clean,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+```
+
+```{r}
+summarize_sampling_rate(ele_trk)
+```
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 2: Prepare data for SSF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+ele_trk_reg <- ele_trk |> 
+  # nest all data except for id
+  nest(data = -id) |> 
+  # for every xyt in data, resample and create steps by burst, and store in column steps
+  mutate(steps = map(data, function(x) {
+    x |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
+      steps_by_burst()
+  })) |>
+  # select id and steps column
+  select(id, steps) |> 
+  # unnest everything in steps column
+  unnest(cols = steps)
+```
+
+
