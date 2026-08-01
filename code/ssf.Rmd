@@ -61,9 +61,9 @@ ele_trk_reg <- ele_trk |>
   # select id and steps column
   select(id, steps) |> 
   # unnest everything in steps column
-  unnest(cols = steps) |> 
-  # create random/control steps
+  unnest(cols = steps)
 
+# create random/control steps
 ele_trk_reg <- ele_trk_reg |> 
   random_steps(10)
 ```
