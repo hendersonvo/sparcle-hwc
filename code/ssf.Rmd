@@ -86,14 +86,27 @@ for (folder in ssf_data) {
 }
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
-raster_stack <- c()
+target_res <- 0.008333333
+template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+
+raster_list <- c()
 
 # create raster stack
-for (raster in file_paths){
-  raster_object <- rast(raster) # turn file path into a raster object 
-  raster_projected <- project(raster_object, "EPSG:4326", method = "bilinear") # project
-  raster_cropped <- crop(raster_projected, crop_extent) # crop
-  raster_stack <- c(raster_stack, raster_projected) # add raster to stack
-}
+raster_list <- lapply(file_paths, function(fp) {
+  r <- rast(fp)
+  project(r, template, method = "bilinear")
+})
+
+raster_stack <- rast(raster_list)                                               # create stack from list
+```
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 4: Fitting SSF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+# Preliminary step: extract covariates to points
+ele_trk_extracted <- ele_trk_reg |> 
+  extract_covariates(raster_stack)
 ```
 
