@@ -1,6 +1,6 @@
 ---
 title: "Step selection function"
-author: "Henderson Vo"
+author: "Henderson Vo, Marissa Brenner, Rachel Frost"
 date: "2026-07-31"
 output: html_document
 ---
@@ -72,4 +72,28 @@ ele_trk_reg <- ele_trk_reg |>
 # Step 3: Prepare raster stack for environmental covariates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+```{r}
+file_paths <- c()
+anthro_folder <- here("data", "ssf_anthro_data")
+enviro_folder <- here("data", "ssf_enviro_data")
+ssf_data <- c(anthro_folder, enviro_folder)
+
+# create a vector of file paths to each raster
+for (folder in ssf_data) {
+  for (file in list.files(folder)){
+    file_paths <- c(file_paths, here(folder, file))
+  }
+}
+
+crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
+raster_stack <- c()
+
+# create raster stack
+for (raster in file_paths){
+  raster_object <- rast(raster) # turn file path into a raster object 
+  raster_projected <- project(raster_object, "EPSG:4326", method = "bilinear") # project
+  raster_cropped <- crop(raster_projected, crop_extent) # crop
+  raster_stack <- c(raster_stack, raster_projected) # add raster to stack
+}
+```
 
