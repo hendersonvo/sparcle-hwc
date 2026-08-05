@@ -16,7 +16,9 @@ library(here)
 
 # spatial
 library(terra)
+#library(tidyterra)
 library(amt) # ssf
+library(survival)
 
 ```
 
@@ -92,13 +94,16 @@ template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 raster_list <- c()
 
 # create raster stack
-raster_list <- lapply(file_paths, function(fp) {
-  r <- rast(fp)
-  project(r, template, method = "bilinear")
+raster_list <- map(file_paths, function(fp) {
+  r <- rast(fp)                                                                 # turn file path into raster
+  r <- r[[nlyr(r)]]                                                             # only include the last layer
+  project(r, template, method = "bilinear")                                     # project
 })
 
 raster_stack <- rast(raster_list)                                               # create stack from list
+names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 
 ```
+
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Step 4: Fitting SSF
@@ -108,5 +113,12 @@ raster_stack <- rast(raster_list)                                               
 # Preliminary step: extract covariates to points
 ele_trk_extracted <- ele_trk_reg |> 
   extract_covariates(raster_stack)
+
+ele_trk_extracted <- ele_trk_extracted |> clean_names()
+```
+
+```{r}
+m0 <- clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id),
+             data = ele_trk_extracted)
 ```
 
