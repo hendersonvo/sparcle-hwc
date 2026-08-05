@@ -13,13 +13,12 @@ Following the [tutorial](https://cran.r-project.org/web/packages/amt/vignettes/p
 library(tidyverse)
 library(janitor)
 library(here)
+library(tools)
 
 # spatial
 library(terra)
-#library(tidyterra)
 library(amt) # ssf
 library(survival)
-
 ```
 
 ```{r}
@@ -118,7 +117,8 @@ ele_trk_extracted <- ele_trk_extracted |> clean_names()
 ```
 
 ```{r}
-m0 <- clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id),
-             data = ele_trk_extracted)
+m0 <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + copy_of_af_dem_5_4 + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
+
+summary(m0)
 ```
 
