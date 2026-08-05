@@ -43,7 +43,7 @@ ele_trk <- make_track(ele_clean,
 ```
 
 ```{r}
-summarize_sampling_rate(ele_trk)
+summarize_sampling_rate(ele_trk) # sampling rate should be 1 hour
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -101,7 +101,7 @@ raster_list <- map(file_paths, function(fp) {
 })
 
 raster_stack <- rast(raster_list)                                               # create stack from list
-names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 
+names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 # rename rasters to file name
 ```
 
 
