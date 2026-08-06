@@ -18,7 +18,6 @@ library(tools)
 # spatial
 library(terra)
 library(amt) # ssf
-library(survival)
 ```
 
 ```{r}
@@ -33,16 +32,32 @@ ele_data <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
 # cleaning data
 ele_clean <- ele_data |> 
   clean_names() |> 
-  mutate(dt = mdy_hm(dt))
+  mutate(dt = mdy_hm(dt)) |> 
+  mutate(season = case_when(
+    month %in% c(5:10) ~ "dry",
+    month %in% c(1:4, 11:12) ~ "wet"
+  ))
+
+# separating by season
+ele_dry <- ele_clean |> 
+  filter(season == "dry")
+
+ele_wet <- ele_clean |> 
+  filter(season == "wet")
 
 # structure tracking data
-ele_trk <- make_track(ele_clean,
+ele_trk_dry <- make_track(ele_dry,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+
+ele_trk_wet <- make_track(ele_wet,
                       .x = lon, .y = lat, .t = dt,
                       id = id, crs = 4326)
 ```
 
 ```{r}
-summarize_sampling_rate(ele_trk) # sampling rate should be 1 hour
+summarize_sampling_rate(ele_trk_dry) # sampling rate should be 1 hour
+summarize_sampling_rate(ele_trk_wet)
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -50,7 +65,22 @@ summarize_sampling_rate(ele_trk) # sampling rate should be 1 hour
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-ele_trk_reg <- ele_trk |> 
+# ele_trk_reg <- ele_trk |>
+#   # nest all data except for id
+#   nest(data = -id) |>
+#   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
+#   mutate(steps = map(data, function(x) {
+#     x |>
+#       track_resample(rate = hours(1), tolerance = minutes(15)) |>
+#       steps_by_burst()
+#   })) |>
+#   # select id and steps column
+#   select(id, steps) |>
+#   # unnest everything in steps column
+#   unnest(cols = steps)
+
+resample_trk <- function(trk) {
+  trk |> 
   # nest all data except for id
   nest(data = -id) |> 
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
@@ -63,10 +93,15 @@ ele_trk_reg <- ele_trk |>
   select(id, steps) |> 
   # unnest everything in steps column
   unnest(cols = steps)
+}
+
+ele_dry_reg <- resample_trk(ele_trk_dry)
+ele_wet_reg <- resample_trk(ele_trk_wet)
 
 # create random/control steps
-ele_trk_reg <- ele_trk_reg |> 
-  random_steps(10)
+set.seed(123)
+ele_dry_reg <- ele_dry_reg |> random_steps(10)
+ele_wet_reg <- ele_wet_reg |> random_steps(10)
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -87,8 +122,10 @@ for (folder in ssf_data) {
 }
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
+test_crop <- ext(18.182, 25.563, -21.196, -16.834)
+
 target_res <- 0.008333333
-template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
 
 raster_list <- c()
 
@@ -117,7 +154,7 @@ ele_trk_extracted <- ele_trk_extracted |> clean_names()
 ```
 
 ```{r}
-m0 <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + copy_of_af_dem_5_4 + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
+m0 <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
 
 summary(m0)
 ```
