@@ -65,20 +65,6 @@ summarize_sampling_rate(ele_trk_wet)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-# ele_trk_reg <- ele_trk |>
-#   # nest all data except for id
-#   nest(data = -id) |>
-#   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
-#   mutate(steps = map(data, function(x) {
-#     x |>
-#       track_resample(rate = hours(1), tolerance = minutes(15)) |>
-#       steps_by_burst()
-#   })) |>
-#   # select id and steps column
-#   select(id, steps) |>
-#   # unnest everything in steps column
-#   unnest(cols = steps)
-
 resample_trk <- function(trk) {
   trk |> 
   # nest all data except for id
@@ -178,7 +164,7 @@ ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names()
 ```
 
 ```{r}
-m0 <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
+m0_wet <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
 
 summary(m0)
 ```
