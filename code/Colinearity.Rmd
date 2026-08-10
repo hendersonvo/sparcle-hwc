@@ -22,16 +22,15 @@ str(elephant)
 
 coord_x <- "Lon"
 coord_y <- "Lat"
-
 ```
 ```{r}
 #Load all raster tif covariates 
 
-anthro_files <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/ssf_anthro_data", pattern = "\\.tif$", full.names = TRUE)
+dry_szn <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/baseline_2020_with_spei/dry_szn", pattern = "\\.tif$", full.names = TRUE)
 
-enviro_files <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/ssf_enviro_data", pattern = "\\.tif", full.names = TRUE)
+wet_szn <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/baseline_2020_with_spei/wet_szn", pattern = "\\.tif", full.names = TRUE)
 
-all_raster_files <- c(anthro_files, enviro_files)
+all_raster_files <- c(dry_szn, wet_szn)
 
 print(all_raster_files)
 
