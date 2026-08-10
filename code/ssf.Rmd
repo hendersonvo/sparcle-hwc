@@ -134,11 +134,14 @@ raster_list_dry <- map(file_paths_dry, function(fp) {
   project(r, template, method = "bilinear")                                     # project
 })
 
-raster_stack_wet <- rast(raster_list_wet)                                               # create stack from list
+raster_stack_wet <- rast(raster_list_wet)                                       # create stack from list
 raster_stack_dry <- rast(raster_list_dry)
 
-names(raster_stack_wet) <- file_path_sans_ext(basename(file_paths_wet))                 # rename rasters to file name
+names(raster_stack_wet) <- file_path_sans_ext(basename(file_paths_wet))  
+names(raster_stack_wet) <-substring(names(raster_stack_wet), 4)
 names(raster_stack_dry) <- file_path_sans_ext(basename(file_paths_dry))
+names(raster_stack_dry) <- substring(names(raster_stack_dry), 4)
+
 ```
 
 
@@ -164,15 +167,11 @@ ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names()
 ```
 
 ```{r}
-<<<<<<< HEAD
-m0_wet <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
-=======
-m0_dry <- ele_trk_extract_dry |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
->>>>>>> 2efd23cba578231abf3872fc9d054a15a44f52b4
+m0_dry <- ele_trk_extract_dry |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + dry_szn_evi_2020 + dry_spei3_fillNA_neg2_2020 + elevation + slope + aspect + strata(step_id))
 
 summary(m0_dry)
 
-m0_wet <- ele_trk_extract_wet |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
+m0_wet <- ele_trk_extract_wet |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + wet_szn_evi_2020 + wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id))
 
 summary(m0_wet)
 ```
