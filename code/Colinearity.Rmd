@@ -1,0 +1,95 @@
+---
+title: "Colineartiy"
+output: html_notebook
+---
+
+```{r}
+# Load packages
+
+library(terra) 
+library(usdm)
+library(corrplot)
+
+setwd("~/Desktop/Arnhold/sparcle-hwc/code")
+```
+
+```{r}
+#Load elephant data 
+elephant <- read.csv("~/Desktop/Arnhold/sparcle-hwc/data/elephant_2010-Feb2020.csv")
+
+head(elephant)
+str(elephant)
+
+coord_x <- "Lon"
+coord_y <- "Lat"
+
+```
+```{r}
+#Load all raster tif covariates 
+
+anthro_files <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/ssf_anthro_data", pattern = "\\.tif$", full.names = TRUE)
+
+enviro_files <- list.files("~/Desktop/Arnhold/sparcle-hwc/data/ssf_enviro_data", pattern = "\\.tif", full.names = TRUE)
+
+all_raster_files <- c(anthro_files, enviro_files)
+
+print(all_raster_files)
+
+raster_list <-lapply(all_raster_files, rast)
+names(raster_list) <- tools::file_path_sans_ext(basename(all_raster_files))
+
+target_crs <- "EPSG:4326" 
+my_extent <-ext(18.461667, 25.283338, -20.916664, -17.133330)
+
+raster_list <- lapply(raster_list, function(r) {
+  if(crs(r) != crs(target_crs)) {
+    r <- project(r, target_crs)
+  }
+  crop(r, my_extent)
+})
+
+template <- raster_list[[1]]
+raster_list_aligned <- lapply(raster_list, function(r) {
+  if (!compareGeom(r, template, stopOnError = FALSE)) {
+    r <- resample(r, template, method = "bilinear")
+  }
+  r
+})
+
+covariates <- rast(raster_list_aligned)
+
+layer_names <- unlist(mapply(function(r, nm) {
+  if (nlyr(r) == 1) {
+    nm
+  } else {
+    paste0(nm, "_", 1:nlyr(r))
+  }
+}, raster_list_aligned, names(raster_list_aligned), SIMPLIFY = FALSE))
+
+names(covariates) <- layer_names
+print(covariates)
+```
+
+```{r}
+#Extract covariate values at elephant points
+
+elephant_pts <- vect(elephant, geom = c(coord_x, coord_y), crs = "EPSG:4326")
+elephant_pts <- project(elephant_pts, target_crs)
+
+elephant_vals <- terra::extract(covariates, elephant_pts)
+elephants_vals <- elephant_vals[, -1]
+elephant_vals <- na.omit(elephant_vals)
+
+```
+
+```{r}
+#multicollinearity test
+corrplot(cor(elephant_vals), method = "number", type = "upper", tl.cex = 0.7)
+
+vif_result <- vifstep(elephant_vals, th = 10)
+print(vif_result)
+
+final_vars <- vif_result@results$Variables
+print(final_vars)
+```
+
