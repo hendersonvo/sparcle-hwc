@@ -147,10 +147,17 @@ names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 
 
 ```{r}
 # Preliminary step: extract covariates to points
-ele_trk_extracted <- ele_trk_reg |> 
+ele_trk_extract_dry <- ele_dry_reg |> 
   extract_covariates(raster_stack)
 
-ele_trk_extracted <- ele_trk_extracted |> clean_names()
+ele_trk_extract_wet <- ele_wet_reg |> 
+  extract_covariates(raster_stack)
+
+#ele_trk_extracted <- ele_trk_reg |> 
+  #extract_covariates(raster_stack)  #former step before separating by season
+
+ele_trk_extract_dry <- ele_trk_extract_dry |> clean_names()
+ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names()
 ```
 
 ```{r}
