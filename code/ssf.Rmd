@@ -65,20 +65,6 @@ summarize_sampling_rate(ele_trk_wet)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-# ele_trk_reg <- ele_trk |>
-#   # nest all data except for id
-#   nest(data = -id) |>
-#   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
-#   mutate(steps = map(data, function(x) {
-#     x |>
-#       track_resample(rate = hours(1), tolerance = minutes(15)) |>
-#       steps_by_burst()
-#   })) |>
-#   # select id and steps column
-#   select(id, steps) |>
-#   # unnest everything in steps column
-#   unnest(cols = steps)
-
 resample_trk <- function(trk) {
   trk |> 
   # nest all data except for id
@@ -109,35 +95,53 @@ ele_wet_reg <- ele_wet_reg |> random_steps(10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-file_paths <- c()
-anthro_folder <- here("data", "ssf_anthro_data")
-enviro_folder <- here("data", "ssf_enviro_data")
-ssf_data <- c(anthro_folder, enviro_folder)
+file_paths_wet <- c()
+file_paths_dry <- c()
+
+wet_folder <- here("data", "baseline_2020_with_spei", "wet_szn")
+dry_folder <- here("data", "baseline_2020_with_spei", "dry_szn")
 
 # create a vector of file paths to each raster
-for (folder in ssf_data) {
-  for (file in list.files(folder)){
-    file_paths <- c(file_paths, here(folder, file))
-  }
+
+for (file in list.files(wet_folder)) {
+  file_paths_wet <- c(file_paths_wet, paste0(wet_folder,"/", file))
 }
+for (file in list.files(dry_folder)) {
+  file_paths_dry <- c(file_paths_dry, paste0(dry_folder,"/", file))
+}
+
+# set up for raster stack
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
 test_crop <- ext(18.182, 25.563, -21.196, -16.834)
-
 target_res <- 0.008333333
+
 template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
 
-raster_list <- c()
+raster_list_wet <- c()
+raster_list_dry <- c()
 
 # create raster stack
-raster_list <- map(file_paths, function(fp) {
+raster_list_wet <- map(file_paths_wet, function(fp) {
   r <- rast(fp)                                                                 # turn file path into raster
   r <- r[[nlyr(r)]]                                                             # only include the last layer
   project(r, template, method = "bilinear")                                     # project
 })
 
-raster_stack <- rast(raster_list)                                               # create stack from list
-names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 # rename rasters to file name
+raster_list_dry <- map(file_paths_dry, function(fp) {
+  r <- rast(fp)                                                                 # turn file path into raster
+  r <- r[[nlyr(r)]]                                                             # only include the last layer
+  project(r, template, method = "bilinear")                                     # project
+})
+
+raster_stack_wet <- rast(raster_list_wet)                                       # create stack from list
+raster_stack_dry <- rast(raster_list_dry)
+
+names(raster_stack_wet) <- file_path_sans_ext(basename(file_paths_wet))         # rename rasters to file name
+names(raster_stack_wet) <-substring(names(raster_stack_wet), 4)                 # remove numerical prefix
+names(raster_stack_dry) <- file_path_sans_ext(basename(file_paths_dry))
+names(raster_stack_dry) <- substring(names(raster_stack_dry), 4)
+
 ```
 
 
@@ -147,15 +151,28 @@ names(raster_stack) <- file_path_sans_ext(basename(file_paths))                 
 
 ```{r}
 # Preliminary step: extract covariates to points
-ele_trk_extracted <- ele_trk_reg |> 
-  extract_covariates(raster_stack)
+ele_trk_extract_dry <- ele_dry_reg |> 
+  extract_covariates(raster_stack_dry)
 
-ele_trk_extracted <- ele_trk_extracted |> clean_names()
+ele_trk_extract_wet <- ele_wet_reg |> 
+  extract_covariates(raster_stack_wet)
+
+#ele_trk_extracted <- ele_trk_reg |> 
+  #extract_covariates(raster_stack)  #former step before separating by season
+
+ele_trk_extract_dry <- ele_trk_extract_dry |> clean_names()
+ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names()
+
+#ele_trk_extracted <- ele_trk_extracted |> clean_names()
 ```
 
 ```{r}
-m0 <- ele_trk_extracted |> fit_clogit(case ~ cci_built_img_1 + cci_cropland_img + copy_of_roads_distance_rast + merged_de_ms + dist_to_fences + nam_pd_2020_1km + cci_grassland_img + cci_shrub_img + cci_tree_img + cci_water_img + copy_of_core_dist_rast + rivers_dist_rast + slope + strata(step_id))
+m0_dry <- ele_trk_extract_dry |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + dry_szn_evi_2020 + dry_spei3_fill_na_neg2_2020 + elevation + slope + aspect + strata(step_id))
 
-summary(m0)
+summary(m0_dry)
+
+m0_wet <- ele_trk_extract_wet |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + wet_szn_evi_2020 + wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id))
+
+summary(m0_wet)
 ```
 
