@@ -56,13 +56,25 @@ ele_clean0 <- ele_data0 |>
   ))
 
 ele_clean1 <- ele_data1 |> 
-  # INCOMPLETE
+  clean_names() |> 
+  rename(dt = timestamp,
+         lon = location_long,
+         lat = location_lat,
+         id = tag_local_identifier) |> 
+  mutate(season = case_when(
+    month(dt) %in% c(5:10) ~ "dry",
+    month(dt) %in% c(1:4, 11:12) ~ "wet"
+  ))
 
+ele_join <- bind_rows(ele_clean0, ele_clean1)
+```
+
+```{r}
 # separating by season
-ele_dry <- ele_clean |> 
+ele_dry <- ele_join |> 
   filter(season == "dry")
 
-ele_wet <- ele_clean |> 
+ele_wet <- ele_join |> 
   filter(season == "wet")
 
 # structure tracking data
@@ -76,8 +88,8 @@ ele_trk_wet <- make_track(ele_wet,
 ```
 
 ```{r}
-summarize_sampling_rate(ele_trk_dry) # sampling rate should be 1 hour
-summarize_sampling_rate(ele_trk_wet)
+summarize_sampling_rate(ele_trk_dry, time_unit = "sec") # sampling rate should be ?
+summarize_sampling_rate(ele_trk_wet, time_unit = "sec")
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -133,7 +145,7 @@ for (file in list.files(dry_folder)) {
 # set up for raster stack
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
-test_crop <- ext(18.182, 25.563, -21.196, -16.834)
+test_crop <- ext(12, 25.563, -21.5, -16.5)
 target_res <- 0.0009
 
 template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
