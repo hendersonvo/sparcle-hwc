@@ -21,22 +21,42 @@ library(amt) # ssf
 ```
 
 ```{r}
-# -----loading data-----
-ele_data <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
+# ----- loading data -----
+ele_data0 <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
 ```
+
+```{r}
+# ----- loading new data -----
+etosha_folder <- here("data", "Elephant movements", "Etosha")
+kunene_folder <- here("data", "Elephant movements", "Kunene")
+omusati_folder <- here("data", "Elephant movements", "Omusati")
+
+ele_data1 <- NULL
+for (folder in c(etosha_folder, kunene_folder, omusati_folder)){
+  for (file in list.files(folder)) {
+    file_path <- paste0(folder,"/", file)
+    collar_table <- read_csv(file_path) |> clean_names()
+    ele_data1 <- bind_rows(ele_data1, collar_table)
+  }
+}
+```
+
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Step 1: Getting the data ready
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```{r}
 # cleaning data
-ele_clean <- ele_data |> 
+ele_clean0 <- ele_data0 |> 
   clean_names() |> 
   mutate(dt = mdy_hm(dt)) |> 
   mutate(season = case_when(
     month %in% c(5:10) ~ "dry",
     month %in% c(1:4, 11:12) ~ "wet"
   ))
+
+ele_clean1 <- ele_data1 |> 
+  # INCOMPLETE
 
 # separating by season
 ele_dry <- ele_clean |> 
