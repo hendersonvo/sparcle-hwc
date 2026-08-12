@@ -189,22 +189,27 @@ ele_trk_extract_dry <- ele_dry_reg |>
 ele_trk_extract_wet <- ele_wet_reg |> 
   extract_covariates(raster_stack_wet)
 
-#ele_trk_extracted <- ele_trk_reg |> 
-  #extract_covariates(raster_stack)  #former step before separating by season
-
+#clean names
 ele_trk_extract_dry <- ele_trk_extract_dry |> clean_names()
 ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names()
 
-#ele_trk_extracted <- ele_trk_extracted |> clean_names()
 ```
 
 ```{r}
+#dry season linear model
 m0_dry <- ele_trk_extract_dry |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + dry_szn_evi_2020 + dry_spei3_fill_na_neg2_2020 + elevation + slope + aspect + strata(step_id))
 
 summary(m0_dry)
 
+#wet season linear model
 m0_wet <- ele_trk_extract_wet |> fit_clogit(case ~ built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + wet_szn_evi_2020 + wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id))
 
 summary(m0_wet)
+
+#save model outputs
+saveRDS(m0_wet, here("outputs/m0_wet.rds"))
+saveRDS(m0_dry, here("outputs/m0_dry.rds"))
+saveRDS(ele_trk_extract_wet, here("outputs/ele_trk_extract_wet.rds"))
+saveRDS(ele_trk_extract_dry, here("outputs/ele_trk_extract_dry.rds"))
 ```
 
