@@ -146,7 +146,7 @@ for (file in list.files(dry_folder)) {
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
 test_crop <- ext(12, 25.563, -21.5, -16.5)
-target_res <- 0.0009
+target_res <- 0.0045
 
 template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
 
