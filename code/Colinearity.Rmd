@@ -32,7 +32,7 @@ elephant_pts <- vect(elephant, geom = c(coord_x, coord_y), crs = "EPSG:4326")
 elephant_pts <- project(elephant_pts, target_crs)
 
 # Split by season using existing `month` column
-wet_months <- c(11, 12, 1, 2, 3, 4)   # adjust to your region's actual wet/dry cutoffs
+wet_months <- c(11, 12, 1, 2, 3, 4)  
 dry_months <- c(5, 6, 7, 8, 9, 10)
 
 elephant_wet <- elephant[elephant$month %in% wet_months, ]
