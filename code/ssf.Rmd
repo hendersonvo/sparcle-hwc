@@ -209,9 +209,11 @@ ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names() |>
 ```{r}
 # dry season model
 m0_dry <- ele_trk_extract_dry |> fit_issf(case ~ sl + log_sl + cos_ta + 
-                                              built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + water_2020 + core_dist_rast + 
-                                              rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + dry_szn_evi_2020 + 
-                                              dry_spei3_fill_na_neg2_2020 + elevation + slope + aspect + strata(step_id),
+                                            built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + 
+                                            tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + 
+                                            roads_distance_rast + fences_dist_rast + pop_density_2020 + 
+                                            dry_szn_evi_2020 + dry_spei3_fill_na_neg2_2020 + elevation + 
+                                            slope + aspect + strata(step_id),
                                           model = TRUE)
 
 summary(m0_dry)
@@ -219,8 +221,9 @@ summary(m0_dry)
 # wet season model
 m0_wet <- ele_trk_extract_wet |> fit_issf(case ~ sl + log_sl + cos_ta + 
                                             built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + 
-                                            water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + fences_dist_rast + pop_density_2020 + 
-                                            wet_szn_evi_2020 + wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id),
+                                            water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + 
+                                            fences_dist_rast + pop_density_2020 + wet_szn_evi_2020 + 
+                                            wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id),
                                           model = TRUE)
 
 summary(m0_wet)
