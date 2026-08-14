@@ -8,7 +8,7 @@ output: html_document
 Following the [tutorial](https://cran.r-project.org/web/packages/amt/vignettes/p4_SSF.html) by Johannes Signer.
 
 ```{r}
-# -----loading packages-----
+#| include: false
 # general use
 library(tidyverse)
 library(janitor)
@@ -26,6 +26,7 @@ ele_data0 <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
 ```
 
 ```{r}
+#| include: false
 # ----- loading new data -----
 etosha_folder <- here("data", "Elephant movements", "Etosha")
 kunene_folder <- here("data", "Elephant movements", "Kunene")
@@ -97,6 +98,7 @@ summarize_sampling_rate(ele_trk_wet, time_unit = "sec")
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
+#| include: false
 resample_trk <- function(trk) {
   trk |> 
   # nest all data except for id
@@ -113,13 +115,27 @@ resample_trk <- function(trk) {
   unnest(cols = steps)
 }
 
-ele_dry_reg <- resample_trk(ele_trk_dry)
-ele_wet_reg <- resample_trk(ele_trk_wet)
+random_steps_by_id <- function(reg_trk) {
+  reg_trk |>
+    nest(data = -id) |>
+    mutate(data = map(data, ~ random_steps(.x, n = 10))) |>
+    pull(data) |>
+    bind_rows()
+}
+
+# Set seed before generating any random steps
+set.seed(123)
+# Resample based on elephant ID 
+ele_dry_reg <- resample_trk(ele_trk_dry) |> random_steps_by_id()
+ele_wet_reg <- resample_trk(ele_trk_wet) |> random_steps_by_id()
+
+#ele_dry_reg <- resample_trk(ele_trk_dry)
+#ele_wet_reg <- resample_trk(ele_trk_wet)
 
 # create random/control steps
-set.seed(123)
-ele_dry_reg <- ele_dry_reg |> random_steps(10)
-ele_wet_reg <- ele_wet_reg |> random_steps(10)
+#set.seed(123)
+#ele_dry_reg <- ele_dry_reg |> random_steps(10)
+#ele_wet_reg <- ele_wet_reg |> random_steps(10)
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
