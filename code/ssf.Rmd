@@ -174,7 +174,7 @@ for (file in list.files(dry_folder)) {
 # set up for raster stack
 
 crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
-test_crop <- ext(12, 25.563, -21.5, -16.5)
+test_crop <- ext(12.5, 25.5, -21.5, -16.5)
 target_res <- 0.0045 # 500m resolution
 
 template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
@@ -217,7 +217,9 @@ ele_trk_extract_dry <- ele_dry_reg |>
 
 ele_trk_extract_wet <- ele_wet_reg |> 
   extract_covariates(raster_stack_wet)
+```
 
+```{r}
 # clean names and add columns for log step length and cos turning angle
 
 ele_trk_extract_dry <- ele_trk_extract_dry |> clean_names() |> 
