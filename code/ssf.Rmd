@@ -129,6 +129,7 @@ random_steps_by_id <- function(reg_trk) {
   reg_trk |>
     nest(data = -id) |>
     mutate(data = map(data, ~ random_steps(.x, n = 10))) |>
+    mutate(data = map2(data, id, ~ mutate(.x, id = .y))) |>  # <- reattach id inside, keeps class
     pull(data) |>
     bind_rows()
 }
@@ -230,6 +231,21 @@ ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names() |>
     cos_ta = cos(ta)
   )
 
+# update to make step_id unique to each elephant before fitting
+ele_trk_extract_dry <- ele_trk_extract_dry |>
+  mutate(step_id = paste(id, step_id, sep = "_"))
+
+ele_trk_extract_wet <- ele_trk_extract_wet |>
+  mutate(step_id = paste(id, step_id, sep = "_"))
+
+# Log-transform population density: raw variable data is heavily right-skewed
+# (99th pctile 0.27, max 9.5, driven by <20 near-settlement pixels).
+ele_trk_extract_dry <- ele_trk_extract_dry |>
+  mutate(log_pop_density_2020 = log1p(pop_density_2020))
+
+ele_trk_extract_wet <- ele_trk_extract_wet |>
+  mutate(log_pop_density_2020 = log1p(pop_density_2020))
+
 ```
 
 ```{r}
@@ -237,22 +253,20 @@ ele_trk_extract_wet <- ele_trk_extract_wet |> clean_names() |>
 m0_dry <- ele_trk_extract_dry |> fit_issf(case ~ sl + log_sl + cos_ta + 
                                             built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + 
                                             tree_2020 + water_2020 + core_dist_rast + rivers_dist_rast + 
-                                            roads_distance_rast + fences_dist_rast + pop_density_2020 + 
-                                            dry_szn_evi_2020 + dry_spei3_fill_na_neg2_2020 + elevation + 
-                                            slope + aspect + strata(step_id),
-                                          model = TRUE)
-
+                                            roads_distance_rast + fences_dist_rast + log_pop_density_2020 + 
+                                            dry_szn_evi_2020 + elevation + slope + aspect + strata(step_id),
+                                          model = FALSE)
 summary(m0_dry)
 
 # wet season model
 m0_wet <- ele_trk_extract_wet |> fit_issf(case ~ sl + log_sl + cos_ta + 
                                             built_2020 + cropland_2020 + grassland_2020 + shrub_2020 + tree_2020 + 
                                             water_2020 + core_dist_rast + rivers_dist_rast + roads_distance_rast + 
-                                            fences_dist_rast + pop_density_2020 + wet_szn_evi_2020 + 
-                                            wet_spei3_grid_2020 + elevation + slope + aspect + strata(step_id),
-                                          model = TRUE)
-
+                                            fences_dist_rast + log_pop_density_2020 + wet_szn_evi_2020 + 
+                                            elevation + slope + aspect + strata(step_id),
+                                          model = FALSE)
 summary(m0_wet)
+
 ```
 
 ```{r}
