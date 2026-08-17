@@ -37,6 +37,16 @@ for (folder in c(etosha_folder, kunene_folder, omusati_folder)){
   for (file in list.files(folder)) {
     file_path <- paste0(folder,"/", file)
     collar_table <- read_csv(file_path) |> clean_names()
+    
+    if (folder == etosha_folder) {
+      collar_table <- collar_table |> mutate(region = "etosha")
+    } else {
+      if (folder == kunene_folder) {
+        collar_table <- collar_table |>  mutate(region = "kunene")
+      } else {
+          collar_table <- collar_table |> mutate(region = "omusati")
+        }
+      }
     ele_data1 <- bind_rows(ele_data1, collar_table)
   }
 }
@@ -106,7 +116,7 @@ resample_trk <- function(trk) {
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
-      track_resample(rate = hours(1), tolerance = minutes(15)) |>
+      track_resample(rate = hours(4), tolerance = minutes(15)) |>
       steps_by_burst()
   })) |>
   # select id and steps column
@@ -251,6 +261,9 @@ saveRDS(m0_wet, here("outputs/m0_wet.rds"))
 saveRDS(m0_dry, here("outputs/m0_dry.rds"))
 saveRDS(ele_trk_extract_wet, here("outputs/ele_trk_extract_wet.rds"))
 saveRDS(ele_trk_extract_dry, here("outputs/ele_trk_extract_dry.rds"))
+# save raster stacks
+saveRDS(raster_stack_wet, here("outputs/raster_stack_wet.rds"))
+saveRDS(raster_stack_dry, here("outputs/raster_stack_dry.rds"))
 ```
 
 
