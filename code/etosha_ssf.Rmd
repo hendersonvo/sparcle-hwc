@@ -223,8 +223,12 @@ for (yr in 2008:2020) {
     } else{
       r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
       r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
-      sub1 <- evi_extract |> filter(month(t2_) %in% 1:4) |> extract_covariates(r1)
-      sub2 <- evi_extract |> filter(month(t2_) %in% 11:12) |> extract_covariates(r2)
+      sub1 <- evi_extract |> 
+        filter(month(t2_) %in% 1:4) |> 
+        extract_covariates(r1)
+      sub2 <- evi_extract |> 
+        filter(month(t2_) %in% 11:12) |> 
+        extract_covariates(r2)
       evi_extract <- bind_rows(sub1, sub2)
     }
     
@@ -235,6 +239,9 @@ for (yr in 2008:2020) {
 
 ```
 
+```{r}
+# World population extraction loop
+```
 
 
 
@@ -242,11 +249,13 @@ for (yr in 2008:2020) {
 # clean names and add columns for log step length and cos turning angle
 
 ele_trk_extract_dry <- ele_trk_extract_dry |> 
+  clean_names() |> 
   mutate(
     log_sl = log(sl),
     cos_ta = cos(ta)
   )
 ele_trk_extract_wet <- ele_trk_extract_wet |> 
+  clean_names() |> 
   mutate(
     log_sl = log(sl),
     cos_ta = cos(ta)
