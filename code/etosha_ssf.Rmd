@@ -335,6 +335,7 @@ extract_world_pop <- function(ele_trk){
 }
 
 ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
+ele_trk_extract_west <- extract_world_pop(ele_trk_extract_west)
 ```
 
 
@@ -342,13 +343,13 @@ ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
 ```{r}
 # clean names and add columns for log step length and cos turning angle
 
-ele_trk_extract_dry <- ele_trk_extract_dry |> 
+ele_trk_extract_etosha <- ele_trk_extract_etosha |> 
   clean_names() |> 
   mutate(
     log_sl = log(sl),
     cos_ta = cos(ta)
   )
-ele_trk_extract_wet <- ele_trk_extract_wet |> 
+ele_trk_extract_west <- ele_trk_extract_west |> 
   clean_names() |> 
   mutate(
     log_sl = log(sl),
@@ -356,19 +357,19 @@ ele_trk_extract_wet <- ele_trk_extract_wet |>
   )
 
 # update to make step_id unique to each elephant before fitting
-ele_trk_extract_dry <- ele_trk_extract_dry |>
+ele_trk_extract_etosha <- ele_trk_extract_etosha |>
   mutate(step_id = paste(id, step_id, sep = "_"))
 
-ele_trk_extract_wet <- ele_trk_extract_wet |>
+ele_trk_extract_west <- ele_trk_extract_west |>
   mutate(step_id = paste(id, step_id, sep = "_"))
 
 # Log-transform population density: raw variable data is heavily right-skewed
 # (99th pctile 0.27, max 9.5, driven by <20 near-settlement pixels).
-ele_trk_extract_dry <- ele_trk_extract_dry |>
-  mutate(log_pop_density_2020 = log1p(pop_density_2020))
-
-ele_trk_extract_wet <- ele_trk_extract_wet |>
-  mutate(log_pop_density_2020 = log1p(pop_density_2020))
+# ele_trk_extract_dry <- ele_trk_extract_dry |>
+#   mutate(log_pop_density_2020 = log1p(pop_density_2020))
+# 
+# ele_trk_extract_wet <- ele_trk_extract_wet |>
+#   mutate(log_pop_density_2020 = log1p(pop_density_2020))
 
 ```
 
