@@ -339,28 +339,60 @@ ele_trk_extract_west <- ele_trk_extract_west |>
 ```
 
 
+```{r}
+# Splitting by season
+
+ele_trk_extract_etosha_wet <- ele_trk_extract_etosha |> 
+  filter(season == "wet")
+ele_trk_extract_etosha_dry <- ele_trk_extract_etosha |>  
+  filter(season == "dry")
+
+ele_trk_extract_west_wet <- ele_trk_extract_west |> 
+  filter(season == "wet")
+ele_trk_extract_west_dry <- ele_trk_extract_west |> 
+  filter(season == "dry")
+```
+
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Step 5: Fitting the SSF
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
 # etosha model
-m0_etosha <- ele_trk_extract_etosha |> fit_clogit(case ~ 
+m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case ~ 
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id),
                                           model = FALSE)
-summary(m0_etosha)
+summary(m0_etosha_wet)
+
+m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case ~ 
+                                            core_dist + water_dist + forest_dist + crop_dist + 
+                                            built_dist + fence_dist + river_dist + road_dist + 
+                                            elevation + slope + aspect + 
+                                            evi + world_pop + strata(step_id),
+                                          model = FALSE)
+
+summary(m0_etosha_dry)
 
 # western populations model
-m0_west <- ele_trk_extract_west |> fit_clogit(case ~ 
+m0_west_wet <- ele_trk_extract_west_wet |> fit_clogit(case ~ 
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id),
                                           model = FALSE)
-summary(m0_west)
+summary(m0_west_wet)
+
+m0_west_dry <- ele_trk_extract_west_dry |> fit_clogit(case ~ 
+                                            core_dist + water_dist + forest_dist + crop_dist + 
+                                            built_dist + fence_dist + river_dist + road_dist + 
+                                            elevation + slope + aspect + 
+                                            evi + world_pop + strata(step_id),
+                                          model = FALSE)
+summary(m0_west_dry)
 
 ```
 
