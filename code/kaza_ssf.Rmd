@@ -1,0 +1,377 @@
+---
+title: "kaza_ssf"
+author: "Henderson Vo, Marissa Brenner, Rachel Frost"
+date: "2026-08-26"
+output: html_document
+---
+
+Following the [tutorial](https://cran.r-project.org/web/packages/amt/vignettes/p4_SSF.html) by Johannes Signer.
+
+```{r}
+#| include: false
+library(tidyverse)
+library(janitor)
+library(here)
+library(tools)
+
+# spatial
+library(terra)
+library(amt) # ssf
+```
+
+```{r}
+# ----- loading data -----
+ele_data0 <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
+```
+
+```{r}
+#| include: false
+# ----- loading new data -----
+#etosha_folder <- here("data", "Elephant movements", "Etosha")
+##kunene_folder <- here("data", "Elephant movements", "Kunene")
+#omusati_folder <- here("data", "Elephant movements", "Omusati")
+
+```
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 1: Getting the data ready
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```{r}
+# cleaning data
+ele_clean0 <- ele_data0 |> 
+  clean_names() |> 
+  mutate(dt = mdy_hm(dt)) |> 
+  mutate(season = case_when(
+    month %in% c(5:10) ~ "dry",
+    month %in% c(1:4, 11:12) ~ "wet"
+  ))
+
+```
+
+```{r}
+# separating by season
+ele_dry <- ele_clean0 |> 
+  filter(season == "dry")
+
+ele_wet <- ele_clean0 |> 
+  filter(season == "wet")
+
+# structure tracking data
+ele_trk_dry <- make_track(ele_dry,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+
+ele_trk_wet <- make_track(ele_wet,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+```
+
+```{r}
+summarize_sampling_rate(ele_trk_dry, time_unit = "sec") # sampling rate should be ?
+summarize_sampling_rate(ele_trk_wet, time_unit = "sec")
+```
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 2: Prepare data for SSF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+#| include: false
+resample_trk <- function(trk) {
+  trk |> 
+  # nest all data except for id
+  nest(data = -id) |> 
+  # for every xyt in data, resample and create steps by burst, and store in 'steps' column
+  mutate(steps = map(data, function(x) {
+    x |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
+      steps_by_burst()
+  })) |>
+  # select id and steps column
+  select(id, steps) |> 
+  # unnest everything in steps column
+  unnest(cols = steps)
+}
+
+random_steps_by_id <- function(reg_trk) {
+  reg_trk |>
+    nest(data = -id) |>
+    mutate(data = map(data, ~ random_steps(.x, n = 10))) |>
+    mutate(data = map2(data, id, ~ mutate(.x, id = .y))) |>  # <- reattach id inside, keeps class
+    pull(data) |>
+    bind_rows()
+}
+
+# Set seed before generating any random steps
+set.seed(123)
+# Resample based on elephant ID 
+ele_dry_reg <- resample_trk(ele_trk_dry) |> random_steps_by_id()
+ele_wet_reg <- resample_trk(ele_trk_wet) |> random_steps_by_id()
+
+```
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 3: Prepare raster stack for environmental covariates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+file_paths <- c()
+
+gee_folder <- here("data", "500m_data")
+
+# create a vector of file paths to each raster
+# EVI and world population added manually later for each coresponding season/year
+
+for (file in list.files(gee_folder)[!list.files(gee_folder) %in% c("EVI data", "gpw_rast_500m.tif", "worldPop_comb_img_500m.tif")]) {
+  file_paths <- c(file_paths, paste0(gee_folder,"/", file))
+}
+
+```
+
+```{r}
+# set up for raster stack
+
+crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
+test_crop <- ext(12.5, 25.5, -21.5, -16.5)
+target_res <- 0.0045 # 500m resolution
+
+template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
+
+raster_list <- c()
+
+# create raster stack
+raster_list <- map(file_paths, function(fp) {
+  r <- rast(fp)                                                                 # turn file path into raster
+  project(r, template, method = "bilinear")                                     # project
+})
+
+raster_stack <- rast(raster_list)                                               # create stack from list
+
+which(names(raster_stack) == "distance")
+names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
+
+```
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 4: Extracting covariates
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+```{r}
+# Preliminary step: extract covariates to points
+
+ele_trk_extract_dry <- ele_dry_reg |> 
+  extract_covariates(raster_stack)
+
+ele_trk_extract_wet <- ele_wet_reg |> 
+  extract_covariates(raster_stack)
+
+```
+
+```{r}
+# EVI extraction loop
+
+evi_folder <- here("data", "500m_data", "EVI data")
+wet_months <- c(1:4, 11:12)
+dry_months <- c(5:10)
+
+# extract_etosha_evi <- data_frame()
+#
+# for (yr in 2008:2020) {
+#   for (szn in c("dry", "wet")) {
+#     # for each iteration, filter for a year and season
+#     evi_extract <- extract_etosha_clean |> 
+#       filter(year == yr,
+#              season == szn)
+#     # if no rows exist, move on
+#     if (nrow(evi_extract) == 0){next}
+#     
+#     # if season is dry, use the dry season evi
+#     if (szn == "dry"){
+#       r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
+#       evi_extract <- evi_extract |> 
+#         extract_covariates(r)
+#       
+#     # if season is wet, use evi rasters from tail ends of the year
+#     } else{
+#       r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
+#       r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
+#       sub1 <- evi_extract |> 
+#         filter(month(t2_) %in% 1:4) |> 
+#         extract_covariates(r1)
+#       sub2 <- evi_extract |> 
+#         filter(month(t2_) %in% 11:12) |> 
+#         extract_covariates(r2)
+#       evi_extract <- bind_rows(sub1, sub2)
+#     }
+#     
+#     # bind newly extracted rows to new dataframe
+#     extract_etosha_evi <- bind_rows(extract_etosha_evi, evi_extract)
+#   }
+# }
+
+extract_evi <- function(ele_trk) {
+  
+  if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
+    return(ele_trk)
+  }
+  
+  ele_trk_mutated <- ele_trk
+  
+  # create yearly and seasonal data if needed  
+  if(!"year" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |>
+      mutate(year = year(t2_))
+  }
+  if(!"season" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |> 
+      mutate(season = case_when(
+           month(t2_) %in% wet_months ~ "wet",
+           month(t2_) %in% dry_months ~ "dry"))
+  }
+  
+  # initialize output
+  new_dataframe <- tibble()
+  
+  for (yr in 2008:2020) {
+    for (szn in c("dry", "wet")) {
+      # for each iteration, filter for a year and season
+      evi_extract <- ele_trk_mutated |> 
+        filter(year == yr,
+               season == szn)
+      # if no rows exist, move on
+      if (nrow(evi_extract) == 0){next}
+      
+      # if season is dry, use the dry season evi
+      if (szn == "dry"){
+        r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
+        evi_extract <- evi_extract |> 
+          extract_covariates(r)
+        
+      # if season is wet, use evi rasters from tail ends of the year
+      } else{
+        r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
+        r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
+        sub1 <- evi_extract |> 
+          filter(month(t2_) %in% 1:4) |> 
+          extract_covariates(r1)
+        sub2 <- evi_extract |> 
+          filter(month(t2_) %in% 11:12) |> 
+          extract_covariates(r2)
+        evi_extract <- bind_rows(sub1, sub2)
+      }
+      
+      # bind newly extracted rows to new dataframe
+      new_dataframe <- bind_rows(new_dataframe, evi_extract)
+    }
+  }
+  class(new_dataframe) <- class(ele_trk)
+  return(new_dataframe)
+}
+
+# extract evi to base extractions
+ele_trk_extract_dry <- extract_evi(ele_trk_extract_dry)
+ele_trk_extract_wet <- extract_evi(ele_trk_extract_wet)
+```
+
+```{r}
+# World population extraction loop
+
+world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
+world_pop_list <- split(world_pop, 1:nlyr(world_pop))
+
+extract_world_pop <- function(ele_trk){
+  
+  ele_trk_mutated <- ele_trk
+  
+  if(!"year" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |>
+      mutate(year = year(t2_))
+  }  
+  
+  # initialize output
+  new_dataframe <- tibble()
+  
+  for(yr in 2008:2020){
+    pop_extract <- ele_trk_mutated |> 
+      filter(year == yr)
+    
+    if(nrow(pop_extract) == 0){next}
+    
+    list_pos <- yr - 1999
+    
+    r <- world_pop_list[[list_pos]]
+    
+    class(pop_extract) <- class(ele_trk)  # restore track_xyt class
+    
+    pop_extract <- pop_extract |> 
+      extract_covariates(r) |> 
+      rename(world_pop = as.character(yr))
+    
+    new_dataframe <- bind_rows(new_dataframe, pop_extract)
+  }
+  class(new_dataframe) <- class(ele_trk)
+  return(new_dataframe)
+}
+
+# dry/wet split
+ele_trk_extract_dry <- extract_world_pop(ele_trk_extract_dry)
+ele_trk_extract_wet <- extract_world_pop(ele_trk_extract_wet)
+```
+
+
+
+```{r}
+# clean names and add columns for log step length and cos turning angle
+
+ele_trk_extract_dry <- ele_trk_extract_dry |> 
+  clean_names() |> 
+  mutate(
+    log_sl = log(sl),
+    cos_ta = cos(ta),
+    step_id = paste(id, step_id, sep = "_")
+  )
+
+ele_trk_extract_wet <- ele_trk_extract_wet |> 
+  clean_names() |> 
+  mutate(
+    log_sl = log(sl),
+    cos_ta = cos(ta),
+    step_id = paste(id, step_id, sep = "_")
+  )
+# update to make step_id unique to each elephant before fitting
+#ele_trk_extract_east <- ele_trk_extract_etosha |>
+#  mutate(step_id = paste(id, step_id, sep = "_"))
+
+
+# Log-transform population density: raw variable data is heavily right-skewed
+# (99th pctile 0.27, max 9.5, driven by <20 near-settlement pixels).
+# ele_trk_extract_dry <- ele_trk_extract_dry |>
+#   mutate(log_pop_density_2020 = log1p(pop_density_2020))
+# 
+# ele_trk_extract_wet <- ele_trk_extract_wet |>
+#   mutate(log_pop_density_2020 = log1p(pop_density_2020))
+
+```
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Step 5: Fitting the SSF
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+```{r}
+# kaza model dry
+m0_dry_east <- ele_trk_extract_dry |> fit_issf(case ~ sl + log_sl + cos_ta + 
+                                            core_dist + water_dist + forest_dist + crop_dist + 
+                                            built_dist + fence_dist + river_dist + road_dist + 
+                                            elevation + slope + aspect + 
+                                            evi + world_pop + strata(step_id),
+                                          model = FALSE)
+summary(m0_dry_east)
+
+# kaza model wet
+m0_wet_east <- ele_trk_extract_wet |> fit_issf(case ~ sl + log_sl + cos_ta + 
+                                            core_dist + water_dist + forest_dist + crop_dist + 
+                                            built_dist + fence_dist + river_dist + road_dist + 
+                                            elevation + slope + aspect + 
+                                            evi + world_pop + strata(step_id),
+                                          model = FALSE)
+summary(m0_wet_east)
+
+```
