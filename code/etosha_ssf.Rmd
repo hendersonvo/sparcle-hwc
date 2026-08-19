@@ -195,41 +195,6 @@ evi_folder <- here("data", "500m_data", "EVI data")
 wet_months <- c(1:4, 11:12)
 dry_months <- c(5:10)
 
-# extract_etosha_evi <- data_frame()
-#
-# for (yr in 2008:2020) {
-#   for (szn in c("dry", "wet")) {
-#     # for each iteration, filter for a year and season
-#     evi_extract <- extract_etosha_clean |> 
-#       filter(year == yr,
-#              season == szn)
-#     # if no rows exist, move on
-#     if (nrow(evi_extract) == 0){next}
-#     
-#     # if season is dry, use the dry season evi
-#     if (szn == "dry"){
-#       r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
-#       evi_extract <- evi_extract |> 
-#         extract_covariates(r)
-#       
-#     # if season is wet, use evi rasters from tail ends of the year
-#     } else{
-#       r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
-#       r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
-#       sub1 <- evi_extract |> 
-#         filter(month(t2_) %in% 1:4) |> 
-#         extract_covariates(r1)
-#       sub2 <- evi_extract |> 
-#         filter(month(t2_) %in% 11:12) |> 
-#         extract_covariates(r2)
-#       evi_extract <- bind_rows(sub1, sub2)
-#     }
-#     
-#     # bind newly extracted rows to new dataframe
-#     extract_etosha_evi <- bind_rows(extract_etosha_evi, evi_extract)
-#   }
-# }
-
 extract_evi <- function(ele_trk) {
   
   if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
