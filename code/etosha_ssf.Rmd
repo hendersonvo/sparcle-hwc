@@ -380,7 +380,7 @@ ele_trk_extract_west <- ele_trk_extract_west |>
 
 ```{r}
 # etosha model
-m0_etosha <- ele_trk_extract_etosha |> fit_issf(case ~ sl + log_sl + cos_ta + 
+m0_etosha <- ele_trk_extract_etosha |> fit_clogit(case ~ 
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
@@ -389,7 +389,7 @@ m0_etosha <- ele_trk_extract_etosha |> fit_issf(case ~ sl + log_sl + cos_ta +
 summary(m0_etosha)
 
 # western populations model
-m0_west <- ele_trk_extract_west |> fit_issf(case ~ sl + log_sl + cos_ta + 
+m0_west <- ele_trk_extract_west |> fit_clogit(case ~ 
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
