@@ -1,128 +1,475 @@
 ---
-title: "Colineartiy"
+title: "Multicollinearity testing (wet/dry season) across elephant populations: KAZA, Etosha, and Western (Kunene + Omusati)"
 output: html_notebook
 ---
-
 ```{r}
-# Load packages
+# ============================================================
+# Multicollinearity testing (wet/dry season) across elephant
+# populations: KAZA, Etosha, and Western (Kunene + Omusati)
+# ============================================================
 
-library(terra) 
+# ---- 0. Packages ----
+library(terra)
 library(usdm)
 library(corrplot)
+library(dplyr)
+library(lubridate)
 
 setwd("~/Desktop/Arnhold/sparcle-hwc/code")
-```
 
-```{r}
-#Load elephant data 
-elephant <- read.csv("~/Desktop/Arnhold/sparcle-hwc/data/elephant_2010-Feb2020.csv")
 
-head(elephant)
-str(elephant)
+# ============================================================
+# 1. PATHS & CONSTANTS
+# ============================================================
 
-coord_x <- "Lon"
-coord_y <- "Lat"
+base_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data"
 
-target_crs <- "EPSG:4326" 
+# Static covariates + EVI (shared across ALL populations)
+static_folder <- file.path(base_dir, "500m_data")
+evi_folder    <- file.path(static_folder, "EVI data")
 
-my_extent <-ext(18.461667, 25.283338, -20.916664, -17.133330)
+# Movement data (one source per population)
+kaza_file      <- file.path(base_dir, "elephant_2010-Feb2020.csv")                 # single CSV, multiple individuals
+etosha_folder  <- file.path(base_dir, "Elephant movements", "Etosha")              # one CSV per individual
+kunene_folder  <- file.path(base_dir, "Elephant movements", "Kunene")              # one CSV per individual
+omusati_folder <- file.path(base_dir, "Elephant movements", "Omusati")             # one CSV per individual
 
-#Build elephant points 
-elephant_pts <- vect(elephant, geom = c(coord_x, coord_y), crs = "EPSG:4326")
-elephant_pts <- project(elephant_pts, target_crs)
+coord_x    <- "Lon"
+coord_y    <- "Lat"
+target_crs <- "EPSG:4326"
 
-# Split by season using existing `month` column
-wet_months <- c(11, 12, 1, 2, 3, 4)  
-dry_months <- c(5, 6, 7, 8, 9, 10)
+# Kept for reference only -- not applied, since all rasters are already the
+# same CRS/resolution/extent (or are padded to match via extend(), see below).
+my_extent <- ext(12.5, 25.5, -21.5, -16.5)
 
-elephant_wet <- elephant[elephant$month %in% wet_months, ]
-elephant_dry <- elephant[elephant$month %in% dry_months, ]
+wet_months <- c(11, 12, 1, 2, 3, 4)   # Nov - Apr
+dry_months <- c(5, 6, 7, 8, 9, 10)    # May - Oct
 
-elephant_pts_wet <- vect(elephant_wet, geom = c(coord_x, coord_y), crs = "EPSG:4326")
-elephant_pts_wet <- project(elephant_pts_wet, target_crs)
 
-elephant_pts_dry <- vect(elephant_dry, geom = c(coord_x, coord_y), crs = "EPSG:4326")
-elephant_pts_dry <- project(elephant_pts_dry, target_crs)
-```
-```{r}
-#Run multicollinearity test for one season 
+# ============================================================
+# 2. HELPER FUNCTIONS
+# ============================================================
 
-run_multicollinearity <- function(raster_folder, season_label, points) {
+## ---- 2a. Raster prep --------------------------------------
 
-  message("Processing season: ", season_label)
+# Print CRS/resolution/extent/layer-count for a set of raster files.
+# Useful for diagnosing a "geometry mismatch" warning/error.
+diagnose_rasters <- function(files) {
+  for (f in files) {
+    r <- rast(f)
+    cat("\n---", basename(f), "---\n")
+    cat("CRS:   ", crs(r, describe = TRUE)$name, "\n")
+    cat("Res:   ", paste(res(r), collapse = " x "), "\n")
+    cat("Extent:", paste(round(as.vector(ext(r)), 5), collapse = ", "), "\n")
+    cat("Dim:   ", paste(dim(r)[1:2], collapse = " x "), "\n")
+    cat("Layers:", nlyr(r), "\n")
+  }
+}
 
-  raster_files <- list.files(raster_folder, pattern = "\\.tif$", full.names = TRUE)
-  print(raster_files)
+# Load a set of static covariate rasters. If a raster's CRS/resolution match
+# the template but its extent is smaller (e.g. missing rows), pad it with
+# extend() -- this preserves the original pixel values exactly (no
+# interpolation), unlike resample(). Handles multi-band files correctly when
+# naming output layers.
+load_static_covariates <- function(files, template = NULL) {
+  r_list <- lapply(files, rast)
+  names(r_list) <- tools::file_path_sans_ext(basename(files))
 
-  raster_list <- lapply(raster_files, rast)
-  names(raster_list) <- tools::file_path_sans_ext(basename(raster_files))
+  if (is.null(template)) template <- r_list[[1]]
 
-  # Reproject/crop
-  raster_list <- lapply(raster_list, function(r) {
-    if (crs(r) != crs(target_crs)) {
-      r <- project(r, target_crs)
-    }
-    crop(r, my_extent)
-  })
-
-  # Align to first raster as template
-  template <- raster_list[[1]]
-  raster_list_aligned <- lapply(raster_list, function(r) {
-    if (!compareGeom(r, template, stopOnError = FALSE)) {
-      r <- resample(r, template, method = "bilinear")
-    }
+  r_list <- lapply(r_list, function(r) {
+    if (!compareGeom(r, template, stopOnError = FALSE)) r <- extend(r, template)
     r
   })
 
-  covariates <- rast(raster_list_aligned)
-
-  layer_names <- unlist(mapply(function(r, nm) {
-    if (nlyr(r) == 1) {
-      nm
-    } else {
-      paste0(nm, "_", 1:nlyr(r))
+  for (nm in names(r_list)) {
+    if (!compareGeom(r_list[[nm]], template, stopOnError = FALSE)) {
+      warning("Still a mismatch after extend() for raster: ", nm,
+              " -- this likely needs project()/resample(), not just padding.")
     }
-  }, raster_list_aligned, names(raster_list_aligned), SIMPLIFY = FALSE))
-  names(covariates) <- layer_names
+  }
 
-  print(covariates)
+  out <- rast(r_list)
 
-  # Extract covariate values at elephant points
-  elephant_vals <- terra::extract(covariates, points)
-  elephant_vals <- elephant_vals[, -1]
-  elephant_vals <- na.omit(elephant_vals)
+  # nm for single-band files, nm_1/nm_2/... for multi-band files
+  layer_names <- unlist(mapply(function(r, nm) {
+    if (nlyr(r) == 1) nm else paste0(nm, "_", 1:nlyr(r))
+  }, r_list, names(r_list), SIMPLIFY = FALSE))
+  names(out) <- layer_names
 
-  # Multicollinearity test
-  corrplot(cor(elephant_vals), method = "number", type = "upper", tl.cex = 0.7,
-            title = paste("Correlation -", season_label), mar = c(0,0,1,0))
-
-  vif_result <- vifstep(elephant_vals, th = 10)
-  print(vif_result)
-
-  final_vars <- vif_result@results$Variables
-  print(final_vars)
-
-  # Return everything useful, in case you want to inspect later
-  list(
-    covariates   = covariates,
-    elephant_vals = elephant_vals,
-    vif_result   = vif_result,
-    final_vars   = final_vars
-  )
+  out
 }
+
+# Load a single EVI raster for one year/season, matching it to the template
+# geometry. Tries extend() first (cheap, exact); falls back to resample()
+# only if extend() alone isn't enough.
+prep_evi_raster <- function(file, template, layer_name) {
+  r <- rast(file)
+
+  if (!compareGeom(r, template, stopOnError = FALSE)) r <- extend(r, template)
+
+  if (!compareGeom(r, template, stopOnError = FALSE)) {
+    warning("Raster '", layer_name, "' (", basename(file), ") still doesn't match ",
+            "the template after extend() -- falling back to resample().")
+    r <- resample(r, template, method = "bilinear")
+  }
+
+  names(r) <- layer_name
+  r
+}
+
+# Load a multi-band ANNUAL time-series raster (e.g. worldPop, where each band
+# is a calendar year). Unlike other static covariates, this should NOT be
+# treated as one covariate per band -- each point should only be matched to
+# the single band for its own year (like EVI). Returns the aligned stack;
+# use match_year_band() below to pull the right layer per point-year.
+load_annual_raster <- function(file, template) {
+  r <- rast(file)
+  if (!compareGeom(r, template, stopOnError = FALSE)) r <- extend(r, template)
+  if (!compareGeom(r, template, stopOnError = FALSE)) {
+    warning("Raster '", basename(file), "' still doesn't match the template ",
+            "after extend() -- falling back to resample().")
+    r <- resample(r, template, method = "bilinear")
+  }
+  r
+}
+
+# Pick the band matching `target_year` from an annual time-series stack
+# (band names must be the years, e.g. "2000", "2001", ...). Falls back to the
+# nearest available year if there's no exact match (e.g. movement data runs
+# past the raster's most recent year).
+match_year_band <- function(stack, target_year, layer_name) {
+  available_years <- as.numeric(names(stack))
+
+  yr_to_use <- if (as.character(target_year) %in% names(stack)) {
+    target_year
+  } else {
+    nearest <- available_years[which.min(abs(available_years - target_year))]
+    warning("No exact '", layer_name, "' band for year ", target_year,
+            " -- using nearest available year (", nearest, ") instead.")
+    nearest
+  }
+
+  r <- stack[[as.character(yr_to_use)]]
+  names(r) <- layer_name
+  r
+}
+
+## ---- 2b. Movement data loading -----------------------------
+
+# Some sources (e.g. Movebank exports for Etosha/Kunene/Omusati) use
+# different column names than the KAZA data. read.csv() auto-converts
+# hyphens to dots, so "location-long" becomes "location.long", etc.
+# This maps those onto the common Lon/Lat/ID schema the rest of the
+# script expects, without touching data that's already in that schema.
+standardize_movement_columns <- function(df) {
+  if (!coord_x %in% names(df) && "location.long" %in% names(df)) {
+    df[[coord_x]] <- df[["location.long"]]
+  }
+  if (!coord_y %in% names(df) && "location.lat" %in% names(df)) {
+    df[[coord_y]] <- df[["location.lat"]]
+  }
+  if (!"ID" %in% names(df) && "tag.local.identifier" %in% names(df)) {
+    df$ID <- df[["tag.local.identifier"]]
+  }
+  df
+}
+
+# KAZA-style source: a single CSV containing multiple individuals.
+load_movement_csv <- function(file) {
+  df <- read.csv(file, stringsAsFactors = FALSE)
+  standardize_movement_columns(df)
+}
+
+# Etosha/Western-style source: a folder containing one CSV per individual.
+# Adds an ID column (preferring tag-local-identifier, falling back to the
+# filename) if one isn't already present.
+load_movement_folder <- function(folder, pattern = "\\.csv$") {
+  files <- list.files(folder, pattern = pattern, full.names = TRUE, recursive = TRUE)
+  if (length(files) == 0) stop("No CSV files found in: ", folder)
+  message("  Found ", length(files), " individual CSV(s) in: ", folder)
+
+  df_list <- lapply(files, function(f) {
+    df <- read.csv(f, stringsAsFactors = FALSE)
+    df <- standardize_movement_columns(df)
+    if (!"ID" %in% names(df)) df$ID <- tools::file_path_sans_ext(basename(f))
+    df
+  })
+
+  bind_rows(df_list)
+}
+
+# Ensure a movement data frame has numeric `year` and `month` columns,
+# deriving them from a date/timestamp column if not already present.
+ensure_year_month <- function(df, date_col = NULL) {
+  if (all(c("year", "month") %in% names(df))) return(df)
+
+  if (is.null(date_col)) {
+    date_col <- if ("date" %in% names(df)) "date"
+    else if ("DT" %in% names(df)) "DT"
+    else if ("timestamp" %in% names(df)) "timestamp"
+    else stop("No 'year'/'month' columns and no 'date'/'DT'/'timestamp' column to derive them from.")
+  }
+
+  parsed <- lubridate::parse_date_time(
+    df[[date_col]],
+    orders = c("mdy HM", "mdy HMS", "mdy", "ymd HMS", "ymd HM", "ymd", "dmy HM", "dmy")
+  )
+
+  df$year  <- lubridate::year(parsed)
+  df$month <- lubridate::month(parsed)
+  df
+}
+
+## ---- 2c. Season assignment ---------------------------------
+
+# Add `season` (wet/dry) and `wet_year` (the calendar year the wet season
+# STARTED in, since wet season runs Nov -> Apr and crosses the year boundary)
+add_season_columns <- function(df) {
+  df %>%
+    mutate(
+      season   = ifelse(month %in% wet_months, "wet", "dry"),
+      wet_year = ifelse(month %in% c(11, 12), year, year - 1)
+    )
+}
+
+## ---- 2d. Core collinearity extraction -----------------------
+
+make_pts <- function(df) {
+  pts <- vect(df, geom = c(coord_x, coord_y), crs = "EPSG:4326")
+  project(pts, target_crs)
+}
+
+# For one population + one season: loop through each year present, pull the
+# matching seasonal EVI raster AND the matching annual worldPop band, extract
+# static + EVI + worldPop covariate values at that year's points, combine
+# across years, then run a correlation plot + VIF.
+#
+#   elephant_df  : movement data already filtered to one season
+#   season_label : label for messages/plot titles, e.g. "KAZA - Dry Season"
+#   evi_season   : "dry" or "wet" -- controls the EVI filename pattern
+#   year_col     : "year" for dry season, "wet_year" for wet season
+run_multicollinearity_by_year <- function(elephant_df, season_label, evi_season, year_col) {
+
+  message("Processing: ", season_label)
+
+  years <- sort(unique(elephant_df[[year_col]]))
+  message("  Years present: ", paste(years, collapse = ", "))
+
+  all_vals <- list()
+
+  for (yr in years) {
+
+    df_yr <- elephant_df[elephant_df[[year_col]] == yr, ]
+    if (nrow(df_yr) == 0) next
+
+    pts_yr <- make_pts(df_yr)
+
+    evi_file <- if (evi_season == "dry") {
+      file.path(evi_folder, paste0("evi_dry_", yr, ".tif"))
+    } else {
+      file.path(evi_folder, paste0("evi_wet_", yr, "_", yr + 1, ".tif"))
+    }
+
+    if (!file.exists(evi_file)) {
+      warning("  Missing EVI file for ", season_label, " ", yr, ": ", evi_file,
+              " -- skipping this year")
+      next
+    }
+
+    evi_r      <- prep_evi_raster(evi_file, static_template, "evi")
+    worldpop_r <- match_year_band(worldpop_stack, yr, "worldpop")
+
+    covariates_yr <- c(static_stack, evi_r, worldpop_r)
+
+    vals_yr <- terra::extract(covariates_yr, pts_yr)
+    vals_yr <- vals_yr[, -1]  # drop the auto ID column added by terra::extract
+
+    all_vals[[as.character(yr)]] <- vals_yr
+  }
+
+  elephant_vals <- bind_rows(all_vals)
+  elephant_vals <- na.omit(elephant_vals)
+  elephant_vals_curated <- elephant_vals %>%
+  select(-gpw_rast_500m_1, -gpw_rast_500m_2, -gpw_rast_500m_3, -gpw_rast_500m_4, -gpw_rast_500m_5)
+
+  corrplot(cor(elephant_vals), method = "number", type = "upper", tl.cex = 0.7,
+           title = paste("Correlation -", season_label), mar = c(0, 0, 1, 0))
+
+  vif_result <- vifstep(elephant_vals_curated, th = 10)
+  print(vif_result)
+  final_vars <- vif_result@results$Variables
+
+  list(elephant_vals = elephant_vals, vif_result = vif_result, final_vars = final_vars)
+}
+
+# For one population: add season columns, split wet/dry, and run the
+# collinearity test for both seasons.
+run_population <- function(population_name, movement_df) {
+  message("\n===== ", population_name, " =====")
+
+  movement_df <- add_season_columns(movement_df)
+  dry_df <- movement_df %>% filter(season == "dry")
+  wet_df <- movement_df %>% filter(season == "wet")
+
+  dry_results <- run_multicollinearity_by_year(
+    elephant_df  = dry_df,
+    season_label = paste(population_name, "- Dry Season"),
+    evi_season   = "dry",
+    year_col     = "year"
+  )
+
+  wet_results <- run_multicollinearity_by_year(
+    elephant_df  = wet_df,
+    season_label = paste(population_name, "- Wet Season"),
+    evi_season   = "wet",
+    year_col     = "wet_year"
+  )
+
+  list(dry = dry_results, wet = wet_results)
+}
+
+
+# ============================================================
+# 3. LOAD STATIC COVARIATES (shared across all populations)
+# ============================================================
+
+# worldPop is excluded here -- it's a 21-band ANNUAL time series (2000-2020,
+# one band per year), not a set of independent static variables. Treating
+# all 21 years as separate covariates makes them almost perfectly collinear
+# with each other (population barely changes year to year), which is why
+# vifstep was arbitrarily keeping only 1-2 of the 21 bands. Instead it's
+# loaded separately below and matched to each point's own year, same as EVI.
+static_files <- list.files(static_folder, pattern = "\\.tif$", full.names = TRUE)
+static_files <- static_files[!grepl("worldPop_comb_img_500m\\.tif$", static_files)]
+print(static_files)
+
+static_stack    <- load_static_covariates(static_files)
+static_template <- static_stack[[1]]
+print(static_stack)
+
+# ---- worldPop: annual time series, matched per point-year (like EVI) ----
+worldpop_file  <- file.path(static_folder, "worldPop_comb_img_500m.tif")
+worldpop_stack <- load_annual_raster(worldpop_file, static_template)
+names(worldpop_stack)  # should show "2000".."2020" -- confirms band-year mapping
+
+# Optional: uncomment to inspect geometry of a static raster vs. EVI rasters
+# evi_dry_files <- list.files(evi_folder, pattern = "^evi_dry_.*\\.tif$", full.names = TRUE)
+# evi_wet_files <- list.files(evi_folder, pattern = "^evi_wet_.*\\.tif$", full.names = TRUE)
+# diagnose_rasters(c(static_files[1], evi_dry_files[1], evi_wet_files[1]))
+
+
+# ============================================================
+# 4. LOAD MOVEMENT DATA PER POPULATION
+# ============================================================
+
+# ---- KAZA: single CSV, multiple individuals, already has year/month ----
+kaza_data <- load_movement_csv(kaza_file) %>% ensure_year_month()
+
+# ---- Etosha: one CSV per individual ----
+etosha_data <- load_movement_folder(etosha_folder) %>% ensure_year_month()
+
+# ---- Western: Kunene + Omusati combined, one CSV per individual in each ----
+western_data <- bind_rows(
+  load_movement_folder(kunene_folder),
+  load_movement_folder(omusati_folder)
+) %>% ensure_year_month()
+
+
+# ============================================================
+# 5. RUN MULTICOLLINEARITY TESTS FOR EACH POPULATION
+# ============================================================
+
+all_results <- list(
+  KAZA    = run_population("KAZA",    kaza_data),
+  Etosha  = run_population("Etosha",  etosha_data),
+  Western = run_population("Western", western_data)
+)
+
+
+# ============================================================
+# 6. SUMMARY
+# ============================================================
+
+for (pop in names(all_results)) {
+  cat("\n===", pop, "===\n")
+  cat("Dry season retained variables:\n"); print(all_results[[pop]]$dry$final_vars)
+  cat("Wet season retained variables:\n"); print(all_results[[pop]]$wet$final_vars)
+}
+
+# Individual results remain accessible, e.g.:
+# all_results$KAZA$dry$vif_result
+# all_results$Etosha$wet$elephant_vals
+# all_results$Western$dry$final_vars
 ```
 
+```{r}
+r <- rast(file.path(static_folder, "distance_to_landcover_img_500m.tif"))
+names(r)          # band names as stored in the file, if any
+nlyr(r)            # number of bands
+```
 
 ```{r}
-# Run for each season 
-dry_folder <- "~/Desktop/Arnhold/sparcle-hwc/data/baseline_2020_with_spei/dry_szn"
-wet_folder <- "~/Desktop/Arnhold/sparcle-hwc/data/baseline_2020_with_spei/wet_szn"
+r <- rast(file.path(static_folder, "terrain_rast_500m.tif"))
+names(r)          # band names as stored in the file, if any
+nlyr(r)            # number of bands
 
-dry_results <- run_multicollinearity(dry_folder, "Dry Season", elephant_pts_dry)
-wet_results <- run_multicollinearity(wet_folder, "Wet Season", elephant_pts_wet)
+```
 
-# Access results separately, e.g.:
-dry_results$final_vars
-wet_results$final_vars
+```{r}
+r <- rast(file.path(static_folder, "worldPop_comb_img_500m.tif"))
+names(r)          # band names as stored in the file, if any
+nlyr(r)            # number of bands
+```
+
+```{r}
+r <- rast(file.path(static_folder, "gpw_rast_500m.tif"))
+names(r)          # band names as stored in the file, if any
+nlyr(r)            # number of bands
+```
+
+```{r}
+# ============================================================
+# 7. EXPORT RESULTS
+# ============================================================
+ 
+export_dir <- file.path(base_dir, "outputs", "multicollinearity_results")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+ 
+# For one population/season result: write the VIF table, correlation matrix,
+# retained-variable list, extracted covariate values, and a corrplot image.
+export_results <- function(results, population_name, season_label, export_dir) {
+  prefix <- file.path(export_dir, paste0(population_name, "_", season_label))
+ 
+  write.csv(results$vif_result@results, paste0(prefix, "_VIF.csv"), row.names = FALSE)
+  write.csv(cor(results$elephant_vals), paste0(prefix, "_correlation_matrix.csv"))
+  writeLines(results$final_vars, paste0(prefix, "_final_variables.txt"))
+  write.csv(results$elephant_vals, paste0(prefix, "_covariate_values.csv"), row.names = FALSE)
+ 
+  png(paste0(prefix, "_corrplot.png"), width = 1600, height = 1600, res = 200)
+  corrplot(cor(results$elephant_vals), method = "number", type = "upper", tl.cex = 0.7,
+           title = paste("Correlation -", population_name, season_label), mar = c(0, 0, 1, 0))
+  dev.off()
+ 
+  message("Exported: ", basename(prefix), "_*")
+}
+ 
+for (pop in names(all_results)) {
+  export_results(all_results[[pop]]$dry, pop, "Dry", export_dir)
+  export_results(all_results[[pop]]$wet, pop, "Wet", export_dir)
+}
+ 
+# One combined CSV across every population/season, for quick side-by-side comparison
+summary_table <- bind_rows(lapply(names(all_results), function(pop) {
+  bind_rows(
+    all_results[[pop]]$dry$vif_result@results %>% mutate(Population = pop, Season = "Dry"),
+    all_results[[pop]]$wet$vif_result@results %>% mutate(Population = pop, Season = "Wet")
+  )
+})) %>%
+  select(Population, Season, Variables, VIF)
+ 
+write.csv(summary_table, file.path(export_dir, "all_populations_VIF_summary.csv"), row.names = FALSE)
+ 
+message("\nAll results exported to: ", export_dir)
 ```
 
