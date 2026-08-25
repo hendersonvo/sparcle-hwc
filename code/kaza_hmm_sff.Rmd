@@ -1,0 +1,340 @@
+---
+title: "kaza_hmm_sff"
+output: html_document
+---
+
+```{r}
+#| include: false
+library(tidyverse)
+library(janitor)
+library(here)
+library(tools)
+
+# spatial
+library(terra)
+library(amt) # ssf
+library(moveHMM)
+
+# terra masks dplyr::select() -- reclaim it once here rather than patching every call site
+select <- dplyr::select
+```
+
+```{r}
+# ----- loading data -----
+ele_data0 <- read_csv(here("data", "elephant_2010-Feb2020.csv"))
+```
+
+```{r}
+# cleaning data
+ele_clean0 <- ele_data0 |> 
+  clean_names() |> 
+  mutate(dt = mdy_hm(dt)) |> 
+  mutate(season = case_when(
+    month %in% c(5:10) ~ "dry",
+    month %in% c(1:4, 11:12) ~ "wet"
+  ))
+
+```
+
+
+```{r}
+# separating by season
+ele_dry <- ele_clean0 |> 
+  filter(season == "dry")
+
+ele_wet <- ele_clean0 |> 
+  filter(season == "wet")
+
+# HMM combined season track (unsplit -- needed for continuous-track HMM fitting)
+ele_trk_all <- ele_clean0 |>
+  make_track(.x = lon, .y = lat, .t = dt, id = id, season = season, crs = 4326)
+
+# structure tracking data
+ele_trk_dry <- make_track(ele_dry,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+
+ele_trk_wet <- make_track(ele_wet,
+                      .x = lon, .y = lat, .t = dt,
+                      id = id, crs = 4326)
+```
+
+```{r}
+summarize_sampling_rate(ele_trk_dry, time_unit = "sec")
+summarize_sampling_rate(ele_trk_wet, time_unit = "sec")
+
+```
+
+# Step 2
+```{r}
+#| include: false
+resample_trk <- function(trk) {
+  trk |> 
+  nest(data = -id) |> 
+  mutate(steps = map(data, function(x) {
+    x |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
+      steps_by_burst()
+  })) |>
+  dplyr::select(id, steps) |>   # <-- explicit, since terra::select() masks this
+  unnest(cols = steps)
+}
+
+random_steps_by_id <- function(reg_trk) {
+  reg_trk |>
+    nest(data = -id) |>
+    mutate(data = map(data, ~ random_steps(.x, n = 10))) |>
+    mutate(data = map2(data, id, ~ mutate(.x, id = .y))) |>
+    pull(data) |>
+    bind_rows()
+}
+
+#set.seed(123)
+#ele_dry_reg <- resample_trk(ele_trk_dry) |> random_steps_by_id()
+#ele_wet_reg <- resample_trk(ele_trk_wet) |> random_steps_by_id()
+```
+
+```{r}
+# resample full combined track
+ele_all_reg <- resample_trk(ele_trk_all)
+
+season_lookup <- ele_trk_all |>
+  as.data.frame() |>
+  select(id, t_, season)
+
+ele_all_reg <- ele_all_reg |>
+  left_join(season_lookup, by = c("id" = "id", "t1_" = "t_"))
+
+# drop single-row bursts BEFORE building hmm_data -- keeps hmm_data and
+# ele_all_reg row-aligned throughout, so state attaches positionally,
+# no join needed later (a join here caused a 16GB memory crash previously)
+ele_all_reg <- ele_all_reg |>
+  mutate(hmm_burst_id = paste(id, burst_, sep = "_")) |>
+  add_count(hmm_burst_id, name = "burst_n") |>
+  filter(burst_n >= 2) |>
+  select(-burst_n)
+
+cat("rows after dropping single-row bursts:", nrow(ele_all_reg), "\n")
+```
+
+
+```{r}
+hmm_data <- ele_all_reg |>
+  transmute(ID = hmm_burst_id, step = sl_, angle = ta_) |>
+  as.data.frame()
+
+hmm_data$step[hmm_data$step == 0] <- 1e-6
+class(hmm_data) <- c("moveData", class(hmm_data))
+
+nrow(hmm_data) == nrow(ele_all_reg)  # CHECK: TRUE
+
+step_mean0  <- c(quantile(hmm_data$step, .25, na.rm = TRUE), quantile(hmm_data$step, .75, na.rm = TRUE))
+step_sd0    <- step_mean0
+angle_mean0 <- c(0, 0)
+angle_conc0 <- c(0.5, 3)
+
+hmm_fit <- fitHMM(data = hmm_data, nbStates = 2,
+                   stepPar0 = c(step_mean0, step_sd0),
+                   anglePar0 = c(angle_mean0, angle_conc0),
+                   formula = ~1)
+hmm_fit
+```
+```{r}
+fast_state <- as.integer(which.max(hmm_fit$mle$stepPar["mean", ]))
+decoded_states <- viterbi(hmm_fit)
+
+length(decoded_states) == nrow(ele_all_reg)  # >>> CHECK: TRUE, positional assignment safe
+
+ele_all_reg$movement_state <- ifelse(decoded_states == fast_state, "fast", "encamped")
+table(ele_all_reg$movement_state, ele_all_reg$season, useNA = "ifany")
+```
+
+```{r}
+# random steps per subset
+fit_pooled_sl_distr <- function(trk) {
+  sl <- trk$sl_
+  sl[sl == 0] <- 1e-6
+  fit <- fitdistrplus::fitdist(sl, distr = "gamma")
+  amt::make_gamma_distr(shape = fit$estimate["shape"], scale = 1 / fit$estimate["rate"])
+}
+
+# four season x state subsets (from ele_all_reg, after state attached above)
+ele_dry_fast_trk     <- ele_all_reg |> filter(season == "dry", movement_state == "fast")
+ele_dry_encamped_trk <- ele_all_reg |> filter(season == "dry", movement_state == "encamped")
+ele_wet_fast_trk     <- ele_all_reg |> filter(season == "wet", movement_state == "fast")
+ele_wet_encamped_trk <- ele_all_reg |> filter(season == "wet", movement_state == "encamped")
+
+sl_distr_dry_fast     <- fit_pooled_sl_distr(ele_dry_fast_trk)
+sl_distr_dry_encamped <- fit_pooled_sl_distr(ele_dry_encamped_trk)
+sl_distr_wet_fast     <- fit_pooled_sl_distr(ele_wet_fast_trk)
+sl_distr_wet_encamped <- fit_pooled_sl_distr(ele_wet_encamped_trk)
+
+random_steps_pooled_distr <- function(trk, sl_distr) {
+  trk |>
+    nest(data = -id) |>
+    mutate(data = map(data, ~ random_steps(.x, n = 10, sl_distr = sl_distr))) |>
+    mutate(data = map2(data, id, ~ mutate(.x, id = .y))) |>
+    pull(data) |>
+    bind_rows()
+}
+
+set.seed(123)
+ele_dry_fast_reg     <- random_steps_pooled_distr(ele_dry_fast_trk,     sl_distr_dry_fast)
+ele_dry_encamped_reg <- random_steps_pooled_distr(ele_dry_encamped_trk, sl_distr_dry_encamped)
+ele_wet_fast_reg     <- random_steps_pooled_distr(ele_wet_fast_trk,     sl_distr_wet_fast)
+ele_wet_encamped_reg <- random_steps_pooled_distr(ele_wet_encamped_trk, sl_distr_wet_encamped)
+
+sapply(list(ele_dry_fast_reg, ele_dry_encamped_reg, ele_wet_fast_reg, ele_wet_encamped_reg), nrow)
+```
+
+```{r}
+# Step 3: Prepare raster stack for environmental covariates
+
+file_paths <- c()
+gee_folder <- here("data", "500m_data")
+
+for (file in list.files(gee_folder)[!list.files(gee_folder) %in% c("EVI data", "gpw_rast_500m.tif", "worldPop_comb_img_500m.tif")]) {
+  file_paths <- c(file_paths, paste0(gee_folder,"/", file))
+}
+
+
+crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
+test_crop <- ext(12.5, 25.5, -21.5, -16.5)
+target_res <- 0.0045
+
+template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
+
+raster_list <- map(file_paths, function(fp) {
+  r <- rast(fp)
+  project(r, template, method = "bilinear")
+})
+
+raster_stack <- rast(raster_list)
+
+which(names(raster_stack) == "distance")
+names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
+```
+
+# Step 4: Extracting covariates (x4: dry/wet x fast/encamped)
+
+```{r}
+evi_folder <- here("data", "500m_data", "EVI data")
+wet_months <- c(1:4, 11:12)
+dry_months <- c(5:10)
+
+extract_evi <- function(ele_trk) {
+  if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
+    return(ele_trk)
+  }
+  ele_trk_mutated <- ele_trk
+  if(!"year" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |> mutate(year = year(t2_))
+  }
+  if(!"season" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |> 
+      mutate(season = case_when(
+           month(t2_) %in% wet_months ~ "wet",
+           month(t2_) %in% dry_months ~ "dry"))
+  }
+  new_dataframe <- tibble()
+  for (yr in 2008:2020) {
+    for (szn in c("dry", "wet")) {
+      evi_extract <- ele_trk_mutated |> filter(year == yr, season == szn)
+      if (nrow(evi_extract) == 0){next}
+      if (szn == "dry"){
+        r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
+        evi_extract <- evi_extract |> extract_covariates(r)
+      } else{
+        r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
+        r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
+        sub1 <- evi_extract |> filter(month(t2_) %in% 1:4) |> extract_covariates(r1)
+        sub2 <- evi_extract |> filter(month(t2_) %in% 11:12) |> extract_covariates(r2)
+        evi_extract <- bind_rows(sub1, sub2)
+      }
+      new_dataframe <- bind_rows(new_dataframe, evi_extract)
+    }
+  }
+  class(new_dataframe) <- class(ele_trk)
+  return(new_dataframe)
+}
+```
+
+```{r}
+#Extraction
+world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
+world_pop_list <- split(world_pop, 1:nlyr(world_pop))
+
+extract_world_pop <- function(ele_trk){
+  ele_trk_mutated <- ele_trk
+  if(!"year" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |> mutate(year = year(t2_))
+  }  
+  new_dataframe <- tibble()
+  for(yr in 2008:2020){
+    pop_extract <- ele_trk_mutated |> filter(year == yr)
+    if(nrow(pop_extract) == 0){next}
+    list_pos <- yr - 1999
+    r <- world_pop_list[[list_pos]]
+    class(pop_extract) <- class(ele_trk)
+    pop_extract <- pop_extract |> 
+      extract_covariates(r) |> 
+      rename(world_pop = as.character(yr))
+    new_dataframe <- bind_rows(new_dataframe, pop_extract)
+  }
+  class(new_dataframe) <- class(ele_trk)
+  return(new_dataframe)
+}
+
+
+```
+
+```{r}
+clean_and_derive <- function(df) {
+  df |>
+    clean_names() |>
+    mutate(log_sl = log(sl), cos_ta = cos(ta), step_id = paste(id, step_id, sep = "_"))
+}
+
+# NA endpoint filter (from earlier extract_evi debugging: ~19K rows with NA x2/y2)
+prep_for_extraction <- function(df) df |> filter(!is.na(x2_), !is.na(y2_))
+
+ele_trk_extract_dry_fast     <- ele_dry_fast_reg     |> prep_for_extraction() |> extract_covariates(raster_stack)
+ele_trk_extract_dry_encamped <- ele_dry_encamped_reg |> prep_for_extraction() |> extract_covariates(raster_stack)
+ele_trk_extract_wet_fast     <- ele_wet_fast_reg     |> prep_for_extraction() |> extract_covariates(raster_stack)
+ele_trk_extract_wet_encamped <- ele_wet_encamped_reg |> prep_for_extraction() |> extract_covariates(raster_stack)
+
+ele_trk_extract_dry_fast     <- extract_evi(ele_trk_extract_dry_fast)
+ele_trk_extract_dry_encamped <- extract_evi(ele_trk_extract_dry_encamped)
+ele_trk_extract_wet_fast     <- extract_evi(ele_trk_extract_wet_fast)
+ele_trk_extract_wet_encamped <- extract_evi(ele_trk_extract_wet_encamped)
+
+ele_trk_extract_dry_fast     <- extract_world_pop(ele_trk_extract_dry_fast)
+ele_trk_extract_dry_encamped <- extract_world_pop(ele_trk_extract_dry_encamped)
+ele_trk_extract_wet_fast     <- extract_world_pop(ele_trk_extract_wet_fast)
+ele_trk_extract_wet_encamped <- extract_world_pop(ele_trk_extract_wet_encamped)
+
+ele_trk_extract_dry_fast     <- clean_and_derive(ele_trk_extract_dry_fast)
+ele_trk_extract_dry_encamped <- clean_and_derive(ele_trk_extract_dry_encamped)
+ele_trk_extract_wet_fast     <- clean_and_derive(ele_trk_extract_wet_fast)
+ele_trk_extract_wet_encamped <- clean_and_derive(ele_trk_extract_wet_encamped)
+
+sapply(list(ele_trk_extract_dry_fast, ele_trk_extract_dry_encamped, ele_trk_extract_wet_fast, ele_trk_extract_wet_encamped), nrow)
+```
+# Step 5: Fitting the SSF (x4: dry/wet x fast/encamped)
+```{r}
+issf_formula <- case ~ sl + log_sl + cos_ta +
+  core_dist + water_dist + forest_dist + crop_dist +
+  built_dist + fence_dist + river_dist + road_dist +
+  elevation + slope + aspect +
+  evi + world_pop + strata(step_id)
+
+m0_dry_fast     <- ele_trk_extract_dry_fast     |> fit_issf(issf_formula, model = FALSE)
+m0_dry_encamped <- ele_trk_extract_dry_encamped |> fit_issf(issf_formula, model = FALSE)
+m0_wet_fast     <- ele_trk_extract_wet_fast     |> fit_issf(issf_formula, model = FALSE)
+m0_wet_encamped <- ele_trk_extract_wet_encamped |> fit_issf(issf_formula, model = FALSE)
+
+summary(m0_dry_fast)
+summary(m0_dry_encamped)
+summary(m0_wet_fast)
+summary(m0_wet_encamped)
+```
