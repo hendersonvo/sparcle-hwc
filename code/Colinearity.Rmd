@@ -306,7 +306,7 @@ run_multicollinearity_by_year <- function(elephant_df, season_label, evi_season,
   elephant_vals_curated <- elephant_vals %>%
   select(-gpw_rast_500m_1, -gpw_rast_500m_2, -gpw_rast_500m_3, -gpw_rast_500m_4, -gpw_rast_500m_5, -distance_to_landcover_img_500m_1, -distance_to_landcover_img_500m_2, -distance_to_landcover_img_500m_3, -distance_to_landcover_img_500m_4)
 
-  corrplot(cor(elephant_vals), method = "number", type = "upper", tl.cex = 0.7,
+  corrplot(cor(elephant_vals_curated), method = "number", type = "upper", tl.cex = 0.7,
            title = paste("Correlation -", season_label), mar = c(0, 0, 1, 0))
 
   vif_result <- vifstep(elephant_vals_curated, th = 10)
