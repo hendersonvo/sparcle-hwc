@@ -197,14 +197,6 @@ ele_trk_extract_west <- ele_west_reg |>
   extract_covariates_along(raster_stack)
 ```
 
-```{r}
-etosha_extract_summary <- ele_etosha_reg |> 
-  mutate(
-    path_list = ele_trk_extract_etosha,
-    mean_env = map_dbl(path_list, ~ mean(.x, na.rm = TRUE))
-  )
-```
-
 
 ```{r}
 # EVI extraction loop
@@ -218,9 +210,7 @@ extract_evi <- function(ele_trk) {
   if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
     return(ele_trk)
   }
-  
   ele_trk_mutated <- ele_trk
-  
   # create yearly and seasonal data if needed  
   if(!"year" %in% colnames(ele_trk)){
     ele_trk_mutated <- ele_trk_mutated |>
@@ -232,10 +222,8 @@ extract_evi <- function(ele_trk) {
            month(t2_) %in% wet_months ~ "wet",
            month(t2_) %in% dry_months ~ "dry"))
   }
-  
   # initialize output
   new_dataframe <- tibble()
-  
   for (yr in 2008:2020) {
     for (szn in c("dry", "wet")) {
       # for each iteration, filter for a year and season
@@ -244,26 +232,30 @@ extract_evi <- function(ele_trk) {
                season == szn)
       # if no rows exist, move on
       if (nrow(evi_extract) == 0){next}
-      
       # if season is dry, use the dry season evi
       if (szn == "dry"){
         r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
         evi_extract <- evi_extract |> 
-          extract_covariates(r)
-        
+          mutate(evi_list = extract_covariates_along(evi_extract, covariates = r)) |> 
+          mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))
       # if season is wet, use evi rasters from tail ends of the year
       } else{
         r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
         r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
         sub1 <- evi_extract |> 
-          filter(month(t2_) %in% 1:4) |> 
-          extract_covariates(r1)
+          filter(month(t2_) %in% 1:4) 
+        if (nrow(sub1) > 0) {
+          sub1 <- sub1 |> 
+            mutate(evi_list = extract_covariates_along(sub1, covariates = r1)) |> 
+            mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
         sub2 <- evi_extract |> 
-          filter(month(t2_) %in% 11:12) |> 
-          extract_covariates(r2)
+          filter(month(t2_) %in% 11:12) 
+        if (nrow(sub2) > 0) {
+          sub2 <- sub2 |> 
+            mutate(evi_list = extract_covariates_along(sub2, covariates = r2)) |> 
+            mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
         evi_extract <- bind_rows(sub1, sub2)
       }
-      
       # bind newly extracted rows to new dataframe
       new_dataframe <- bind_rows(new_dataframe, evi_extract)
     }
@@ -274,7 +266,7 @@ extract_evi <- function(ele_trk) {
 
 # extract evi to base extractions
 ele_trk_extract_etosha <- extract_evi(ele_trk_extract_etosha)
-ele_trk_extract_west <- extract_evi(ele_trk_extract_west)
+#ele_trk_extract_west <- extract_evi(ele_trk_extract_west)
 ```
 
 ```{r}
@@ -284,33 +276,22 @@ world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
 world_pop_list <- split(world_pop, 1:nlyr(world_pop))
 
 extract_world_pop <- function(ele_trk){
-  
   ele_trk_mutated <- ele_trk
-  
   if(!"year" %in% colnames(ele_trk)){
     ele_trk_mutated <- ele_trk_mutated |>
-      mutate(year = year(t2_))
-  }  
-  
+      mutate(year = year(t2_))}  
   # initialize output
   new_dataframe <- tibble()
-  
   for(yr in 2008:2020){
     pop_extract <- ele_trk_mutated |> 
       filter(year == yr)
-    
     if(nrow(pop_extract) == 0){next}
-    
     list_pos <- yr - 1999
-    
     r <- world_pop_list[[list_pos]]
-    
     class(pop_extract) <- class(ele_trk)  # restore track_xyt class
-    
     pop_extract <- pop_extract |> 
-      extract_covariates(r) |> 
-      rename(world_pop = as.character(yr))
-    
+          mutate(pop_list = extract_covariates_along(pop_extract, covariates = r)) |> 
+          mutate(means_pop = map(pop_list, ~ mean(.x, na.rm = TRUE)))
     new_dataframe <- bind_rows(new_dataframe, pop_extract)
   }
   class(new_dataframe) <- class(ele_trk)
@@ -321,23 +302,47 @@ ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
 ele_trk_extract_west <- extract_world_pop(ele_trk_extract_west)
 ```
 
+```{r}
+lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water")
+lc_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
+
+extract_lc <- function(ele_trk){
+  for(yr in 2008:2020){
+    lc_extract <- ele_trk |> 
+      filter(year == yr)
+    if(nrow(lc_extract == 0)){next}
+    
+    r_list <- list()
+    for(lc in lc_types){
+      r <- rast(paste0(lc_folder, "/", "dist_", lc, "_", yr, ".tif"))
+    }
+  }
+}
+
+#test code
+r_test <- rast(c(paste0(lc_folder, "/dist_cropland_2008.tif"), paste0(lc_folder, "/dist_grassland_2008.tif")))
+names(r_test) <- c("dist_cropland", "dist_grassland")
+test_slice <- slice_sample(ele_etosha_reg, n = 10) |> 
+  mutate(lc_list = extract_covariates_along(test_slice, r_test))
+  
+```
 
 
 ```{r}
 # clean names and add columns for log step length and cos turning angle
 
-ele_trk_extract_etosha <- ele_trk_extract_etosha |> 
-  clean_names() |> 
-  mutate(
-    log_sl = log(sl),
-    cos_ta = cos(ta)
-  )
-ele_trk_extract_west <- ele_trk_extract_west |> 
-  clean_names() |> 
-  mutate(
-    log_sl = log(sl),
-    cos_ta = cos(ta)
-  )
+# ele_trk_extract_etosha <- ele_trk_extract_etosha |> 
+#   clean_names() |> 
+#   mutate(
+#     log_sl = log(sl),
+#     cos_ta = cos(ta)
+#   )
+# ele_trk_extract_west <- ele_trk_extract_west |> 
+#   clean_names() |> 
+#   mutate(
+#     log_sl = log(sl),
+#     cos_ta = cos(ta)
+#   )
 
 # update to make step_id unique to each elephant before fitting
 ele_trk_extract_etosha <- ele_trk_extract_etosha |>
