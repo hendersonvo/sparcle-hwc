@@ -281,7 +281,7 @@ extract_world_pop <- function(ele_trk){
     ele_trk_mutated <- ele_trk_mutated |>
       mutate(year = year(t2_))}  
   # initialize output
-  new_dataframe <- tibble()
+  new_trk <- tibble()
   for(yr in 2008:2020){
     pop_extract <- ele_trk_mutated |> 
       filter(year == yr)
@@ -292,10 +292,10 @@ extract_world_pop <- function(ele_trk){
     pop_extract <- pop_extract |> 
           mutate(pop_list = extract_covariates_along(pop_extract, covariates = r)) |> 
           mutate(means_pop = map(pop_list, ~ mean(.x, na.rm = TRUE)))
-    new_dataframe <- bind_rows(new_dataframe, pop_extract)
+    new_trk <- bind_rows(new_trk, pop_extract)
   }
-  class(new_dataframe) <- class(ele_trk)
-  return(new_dataframe)
+  class(new_trk) <- class(ele_trk)
+  return(new_trk)
 }
 
 ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
@@ -304,26 +304,51 @@ ele_trk_extract_west <- extract_world_pop(ele_trk_extract_west)
 
 ```{r}
 lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water")
-lc_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
+lc_dist_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
 
-extract_lc <- function(ele_trk){
+extract_lc_dist <- function(ele_trk){
+  ele_trk_mutated <- ele_trk
+  if(!"year" %in% colnames(ele_trk)){
+    ele_trk_mutated <- ele_trk_mutated |>
+      mutate(year = year(t2_))}    
+
+  new_trk <- tibble()
+  
   for(yr in 2008:2020){
-    lc_extract <- ele_trk |> 
+    lc_extract <- ele_trk_mutated |> 
       filter(year == yr)
-    if(nrow(lc_extract == 0)){next}
+    if(nrow(lc_extract) == 0){next}
     
     r_list <- list()
-    for(lc in lc_types){
-      r <- rast(paste0(lc_folder, "/", "dist_", lc, "_", yr, ".tif"))
+    for(i in 1:length(lc_types)){
+      lc <- lc_types[i]
+      r <- rast(paste0(lc_dist_folder, "/", "dist_", lc, "_", yr, ".tif"))
+      names(r) <- paste0("dist_", lc)
+      r_list[[i]] <- r
     }
+    r_stack <- rast(r_list)
+    
+    lc_extract <- lc_extract |> 
+      mutate(lc_dist_list = extract_covariates_along(lc_extract, r_stack)) |> 
+      mutate(lc_dist_means = map(lc_dist_list, function(df){
+      as.data.frame(t(colMeans(df, na.rm = TRUE)))
+    }))
+    
+    new_trk <- bind_rows(new_trk, lc_extract)
   }
+  class(new_trk) <- class(ele_trk)
+  return(new_trk)
 }
+```
 
+```{r}
 #test code
-r_test <- rast(c(paste0(lc_folder, "/dist_cropland_2008.tif"), paste0(lc_folder, "/dist_grassland_2008.tif")))
-names(r_test) <- c("dist_cropland", "dist_grassland")
-test_slice <- slice_sample(ele_etosha_reg, n = 10) |> 
-  mutate(lc_list = extract_covariates_along(test_slice, r_test))
+test_slice <- head(ele_etosha_reg, n = 10)|> 
+  extract_lc_dist() |> 
+  extract_world_pop() |> 
+  extract_evi()
+# this works!
+
   
 ```
 
