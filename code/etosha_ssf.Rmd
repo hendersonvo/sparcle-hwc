@@ -123,7 +123,7 @@ random_steps_by_id <- function(reg_trk) {
 set.seed(123)
 # Resample based on elephant ID 
 ele_etosha_reg <- resample_trk(ele_trk_etosha) |> filter(!is.na(sl_), sl_ > 0) |>  random_steps_by_id()
-ele_west_reg <- resample_trk(ele_trk_west) |> random_steps_by_id()
+#ele_west_reg <- resample_trk(ele_trk_west) |> random_steps_by_id()
 
 #ele_dry_reg <- resample_trk(ele_trk_dry)
 #ele_wet_reg <- resample_trk(ele_trk_wet)
@@ -135,7 +135,7 @@ ele_west_reg <- resample_trk(ele_trk_west) |> random_steps_by_id()
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Step 3: Prepare raster stack for environmental covariates
+# Step 3: Prepare raster stack for static covariates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
@@ -144,22 +144,16 @@ file_paths <- c()
 gee_folder <- here("data", "500m_data")
 
 # create a vector of file paths to each raster
-# EVI and world population added manually later for each coresponding season/year
+# EVI and world population added manually later for each corresponding season/year
 
-for (file in list.files(gee_folder)[!list.files(gee_folder) %in% c("EVI data", "gpw_rast_500m.tif", "worldPop_comb_img_500m.tif")]) {
+for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "rivers_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
   file_paths <- c(file_paths, paste0(gee_folder,"/", file))
 }
-
-```
-
-```{r}
 # set up for raster stack
-
-crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
-test_crop <- ext(12.5, 25.5, -21.5, -16.5)
+crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
 target_res <- 0.0045 # 500m resolution
 
-template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
+template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
 raster_list <- c()
 
@@ -171,8 +165,8 @@ raster_list <- map(file_paths, function(fp) {
 
 raster_stack <- rast(raster_list)                                               # create stack from list
 
-which(names(raster_stack) == "distance")
-names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
+# which(names(raster_stack) == "distance")
+names(raster_stack)[c(1:4)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
 ```
 
 
@@ -185,16 +179,54 @@ names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist",
 ele_trk_extract_etosha <- ele_etosha_reg |> 
   mutate(path_list = extract_covariates_along(ele_etosha_reg, covariates = raster_stack)) |> 
   mutate(
-    means_df = map(path_list, function(df){
+    static_means = map(static_list, function(df){
       as.data.frame(t(colMeans(df, na.rm = TRUE)))
     })
   ) |> 
-  unnest(cols = means_df)
+  unnest(cols = static_means)
 
 class(ele_trk_extract_etosha) <- c("track_xyt", "tbl_df", "tbl", "data.frame")
 
 ele_trk_extract_west <- ele_west_reg |> 
   extract_covariates_along(raster_stack)
+```
+
+```{r}
+gee_folder <- here("data", "500m_data")
+
+extract_static <- function(ele_trk){
+  file_paths <- c()
+
+  for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "rivers_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
+    file_paths <- c(file_paths, paste0(gee_folder,"/", file))
+  }
+  # set up for raster stack
+  crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
+  target_res <- 0.0045 # 500m resolution
+  template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+  r_list <- c()
+  # create raster stack
+  r_list <- map(file_paths, function(fp) {
+    r <- rast(fp)                                                                 # turn file path into raster
+    project(r, template, method = "bilinear")                                     # project
+  })
+  r_stack <- rast(r_list)                                               # create stack from list
+  # which(names(r_stack) == "distance")
+  names(r_stack)[c(1:4)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")  
+  
+  static_extract <- ele_trk 
+  static_extract <- static_extract |> 
+    mutate(static_list = extract_covariates_along(static_extract, covariates = r_stack)) |> 
+    mutate(
+      static_means = map(static_list, function(df){
+        as.data.frame(t(colMeans(df, na.rm = TRUE)))
+      })
+    ) |> 
+    unnest(cols = static_means)
+  
+  class(static_extract) <- class(ele_trk)
+  return(static_extract)
+}
 ```
 
 
@@ -265,7 +297,7 @@ extract_evi <- function(ele_trk) {
 }
 
 # extract evi to base extractions
-ele_trk_extract_etosha <- extract_evi(ele_trk_extract_etosha)
+# ele_trk_extract_etosha <- extract_evi(ele_trk_extract_etosha)
 #ele_trk_extract_west <- extract_evi(ele_trk_extract_west)
 ```
 
@@ -298,8 +330,8 @@ extract_world_pop <- function(ele_trk){
   return(new_trk)
 }
 
-ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
-ele_trk_extract_west <- extract_world_pop(ele_trk_extract_west)
+# ele_trk_extract_etosha <- extract_world_pop(ele_trk_extract_etosha)
+# ele_trk_extract_west <- extract_world_pop(ele_trk_extract_west)
 ```
 
 ```{r}
@@ -343,13 +375,14 @@ extract_lc_dist <- function(ele_trk){
 
 ```{r}
 #test code
-test_slice <- head(ele_etosha_reg, n = 10)|> 
+test_slice <- head(ele_etosha_reg, n = 10) 
+test_slice <- test_slice |> 
   extract_lc_dist() |> 
   extract_world_pop() |> 
-  extract_evi()
-# this works!
-
+  extract_evi() |> 
+  extract_static()
   
+# this works!
 ```
 
 
