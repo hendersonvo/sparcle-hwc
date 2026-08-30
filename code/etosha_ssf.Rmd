@@ -175,23 +175,8 @@ names(raster_stack)[c(1:4)] <- c("core_dist", "fence_dist", "river_dist", "road_
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-# Preliminary step: extract covariates to points
-ele_trk_extract_etosha <- ele_etosha_reg |> 
-  mutate(path_list = extract_covariates_along(ele_etosha_reg, covariates = raster_stack)) |> 
-  mutate(
-    static_means = map(static_list, function(df){
-      as.data.frame(t(colMeans(df, na.rm = TRUE)))
-    })
-  ) |> 
-  unnest(cols = static_means)
+# Static layer extraction 
 
-class(ele_trk_extract_etosha) <- c("track_xyt", "tbl_df", "tbl", "data.frame")
-
-ele_trk_extract_west <- ele_west_reg |> 
-  extract_covariates_along(raster_stack)
-```
-
-```{r}
 gee_folder <- here("data", "500m_data")
 
 extract_static <- function(ele_trk){
@@ -255,7 +240,7 @@ extract_evi <- function(ele_trk) {
            month(t2_) %in% dry_months ~ "dry"))
   }
   # initialize output
-  new_dataframe <- tibble()
+  new_trk <- tibble()
   for (yr in 2008:2020) {
     for (szn in c("dry", "wet")) {
       # for each iteration, filter for a year and season
@@ -269,7 +254,7 @@ extract_evi <- function(ele_trk) {
         r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
         evi_extract <- evi_extract |> 
           mutate(evi_list = extract_covariates_along(evi_extract, covariates = r)) |> 
-          mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))
+          mutate(evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))
       # if season is wet, use evi rasters from tail ends of the year
       } else{
         r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
@@ -279,21 +264,24 @@ extract_evi <- function(ele_trk) {
         if (nrow(sub1) > 0) {
           sub1 <- sub1 |> 
             mutate(evi_list = extract_covariates_along(sub1, covariates = r1)) |> 
-            mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
+            mutate(evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
         sub2 <- evi_extract |> 
           filter(month(t2_) %in% 11:12) 
         if (nrow(sub2) > 0) {
           sub2 <- sub2 |> 
             mutate(evi_list = extract_covariates_along(sub2, covariates = r2)) |> 
-            mutate(means_evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
+            mutate(evi = map(evi_list, ~ mean(.x, na.rm = TRUE)))}
         evi_extract <- bind_rows(sub1, sub2)
       }
       # bind newly extracted rows to new dataframe
-      new_dataframe <- bind_rows(new_dataframe, evi_extract)
+      new_trk <- bind_rows(new_trk, evi_extract)
     }
   }
-  class(new_dataframe) <- class(ele_trk)
-  return(new_dataframe)
+  new_trk <- new_trk |> 
+    unnest(cols = evi)
+  
+  class(new_trk) <- class(ele_trk)
+  return(new_trk)
 }
 
 # extract evi to base extractions
@@ -323,9 +311,12 @@ extract_world_pop <- function(ele_trk){
     class(pop_extract) <- class(ele_trk)  # restore track_xyt class
     pop_extract <- pop_extract |> 
           mutate(pop_list = extract_covariates_along(pop_extract, covariates = r)) |> 
-          mutate(means_pop = map(pop_list, ~ mean(.x, na.rm = TRUE)))
+          mutate(world_pop = map(pop_list, ~ mean(.x, na.rm = TRUE)))
     new_trk <- bind_rows(new_trk, pop_extract)
   }
+  new_trk <- new_trk |> 
+    unnest(cols = world_pop)
+  
   class(new_trk) <- class(ele_trk)
   return(new_trk)
 }
@@ -335,6 +326,8 @@ extract_world_pop <- function(ele_trk){
 ```
 
 ```{r}
+# Land cover dist extraction
+
 lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water")
 lc_dist_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
 
@@ -368,6 +361,9 @@ extract_lc_dist <- function(ele_trk){
     
     new_trk <- bind_rows(new_trk, lc_extract)
   }
+  new_trk <- new_trk |> 
+    unnest(cols = lc_dist_means)
+  
   class(new_trk) <- class(ele_trk)
   return(new_trk)
 }
@@ -383,6 +379,14 @@ test_slice <- test_slice |>
   extract_static()
   
 # this works!
+```
+
+```{r}
+ele_extract_etosha <- ele_etosha_reg |> 
+  extract_evi() |> 
+  extract_world_pop |> 
+  extract_static() |> 
+  extract_lc_dist()
 ```
 
 
