@@ -17,7 +17,6 @@ library(tools)
 # spatial
 library(terra)
 library(amt) # ssf
-library(purrr)
 ```
 
 ```{r}
@@ -146,7 +145,7 @@ gee_folder <- here("data", "500m_data")
 # create a vector of file paths to each raster
 # EVI and world population added manually later for each corresponding season/year
 
-for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "rivers_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
+for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
   file_paths <- c(file_paths, paste0(gee_folder,"/", file))
 }
 # set up for raster stack
@@ -166,7 +165,7 @@ raster_list <- map(file_paths, function(fp) {
 raster_stack <- rast(raster_list)                                               # create stack from list
 
 # which(names(raster_stack) == "distance")
-names(raster_stack)[c(1:4)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
+names(raster_stack)[c(1:3)] <- c("core_dist", "fence_dist", "road_dist")
 ```
 
 
@@ -182,7 +181,7 @@ gee_folder <- here("data", "500m_data")
 extract_static <- function(ele_trk){
   file_paths <- c()
 
-  for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "rivers_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
+  for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
     file_paths <- c(file_paths, paste0(gee_folder,"/", file))
   }
   # set up for raster stack
@@ -197,7 +196,7 @@ extract_static <- function(ele_trk){
   })
   r_stack <- rast(r_list)                                               # create stack from list
   # which(names(r_stack) == "distance")
-  names(r_stack)[c(1:4)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")  
+  names(r_stack)[c(1:3)] <- c("core_dist", "fence_dist", "road_dist")  
   
   static_extract <- ele_trk 
   static_extract <- static_extract |> 
@@ -328,7 +327,7 @@ extract_world_pop <- function(ele_trk){
 ```{r}
 # Land cover dist extraction
 
-lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water")
+lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water_rivers")
 lc_dist_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
 
 extract_lc_dist <- function(ele_trk){
@@ -348,7 +347,7 @@ extract_lc_dist <- function(ele_trk){
     for(i in 1:length(lc_types)){
       lc <- lc_types[i]
       r <- rast(paste0(lc_dist_folder, "/", "dist_", lc, "_", yr, ".tif"))
-      names(r) <- paste0("dist_", lc)
+      names(r) <- paste0(lc, "_dist")
       r_list[[i]] <- r
     }
     r_stack <- rast(r_list)
@@ -356,7 +355,8 @@ extract_lc_dist <- function(ele_trk){
     lc_extract <- lc_extract |> 
       mutate(lc_dist_list = extract_covariates_along(lc_extract, r_stack)) |> 
       mutate(lc_dist_means = map(lc_dist_list, function(df){
-      as.data.frame(t(colMeans(df, na.rm = TRUE)))
+      if(nrow(df) > 1){as.data.frame(t(colMeans(df, na.rm = TRUE)))
+        } else{as.data.frame(df)}
     }))
     
     new_trk <- bind_rows(new_trk, lc_extract)
@@ -370,13 +370,61 @@ extract_lc_dist <- function(ele_trk){
 ```
 
 ```{r}
+# Linear feature extraction
+
+
+linear_folder <- here("data", "Linear_features")
+linear_types <- c("hydrorivers")
+
+extract_linear <- function(ele_trk){
+  new_trk <- ele_trk
+  
+  r_list <- list()
+  
+# --- temporary
+  crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
+  target_res <- 0.0045 # 500m resolution
+  template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")  
+# --- end
+  
+  for(i in 1:length(linear_types)){
+    feature <- linear_types[i]
+    r <- rast(paste0(linear_folder, "/", feature, "_Raster_corrected.tif"))
+    r <- project(r, template, method = "bilinear")
+    names(r) <- paste0(feature, "_linear")
+    r_list[[i]] <- r
+  }
+
+# --- temporary
+  r_list[[2]] <- project(rast(paste0(here("data", "500m_data", "core_dist_rast_500m.tif"))), template, method = "bilinear")
+  r_stack <- rast(r_list)
+# --- end
+  
+  new_trk <- new_trk |> 
+    mutate(linear_list = extract_covariates_along(new_trk, r_stack)) |> 
+    mutate(linear_max = map(linear_list, function(df){
+      if(nrow(df) > 1){
+        as.data.frame(t(sapply(df, max, na.rm = TRUE)))
+        } else{as.data.frame(df)}
+    })) |> 
+    unnest(cols = linear_max)
+  
+  class(new_trk) <- class(ele_trk)
+  return(new_trk)
+}
+
+```
+
+
+```{r}
 #test code
 test_slice <- head(ele_etosha_reg, n = 10) 
 test_slice <- test_slice |> 
   extract_lc_dist() |> 
   extract_world_pop() |> 
   extract_evi() |> 
-  extract_static()
+  extract_static() |> 
+  extract_linear()
   
 # this works!
 ```

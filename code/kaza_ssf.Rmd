@@ -357,8 +357,7 @@ ele_trk_extract_wet <- ele_trk_extract_wet |>
 
 ```{r}
 # kaza model dry
-m0_dry_east <- ele_trk_extract_dry |> fit_issf(case ~ sl + log_sl + cos_ta + 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
+m0_dry_east <- ele_trk_extract_dry |> fit_ssf(case ~ core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id),
@@ -366,8 +365,7 @@ m0_dry_east <- ele_trk_extract_dry |> fit_issf(case ~ sl + log_sl + cos_ta +
 summary(m0_dry_east)
 
 # kaza model wet
-m0_wet_east <- ele_trk_extract_wet |> fit_issf(case ~ sl + log_sl + cos_ta + 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
+m0_wet_east <- ele_trk_extract_wet |> fit_ssf(case ~ core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id),
