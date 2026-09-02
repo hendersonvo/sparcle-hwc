@@ -304,7 +304,7 @@ run_multicollinearity_by_year <- function(elephant_df, season_label, evi_season,
   elephant_vals <- bind_rows(all_vals)
   elephant_vals <- na.omit(elephant_vals)
   elephant_vals_curated <- elephant_vals %>%
-  select(-gpw_rast_500m_1, -gpw_rast_500m_2, -gpw_rast_500m_3, -gpw_rast_500m_4, -gpw_rast_500m_5, -distance_to_landcover_img_500m_1, -distance_to_landcover_img_500m_2, -distance_to_landcover_img_500m_3, -distance_to_landcover_img_500m_4, -core_dist_rast_500m, -dist_water, -rivers_dist_rast_500m)
+  select(-gpw_rast_500m_1, -gpw_rast_500m_2, -gpw_rast_500m_3, -gpw_rast_500m_4, -gpw_rast_500m_5, -distance_to_landcover_img_500m_1, -distance_to_landcover_img_500m_2, -distance_to_landcover_img_500m_3, -distance_to_landcover_img_500m_4, -core_dist_rast_500m, -dist_water, -rivers_dist_rast_500m, -terrain_rast_500m_1)
 
   corrplot(cor(elephant_vals_curated), method = "number", type = "upper", tl.cex = 0.7, number.cex = 0.5,
            title = paste("Correlation -", season_label), mar = c(0, 0, 1, 0))
@@ -449,9 +449,7 @@ nlyr(r)            # number of bands
 ```
 
 ```{r}
-# ============================================================
 # 7. EXPORT RESULTS
-# ============================================================
  
 export_dir <- file.path(base_dir, "outputs", "multicollinearity_results")
 dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
