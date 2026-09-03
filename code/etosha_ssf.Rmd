@@ -472,10 +472,10 @@ ele_trk_extract_etosha <- ele_etosha_reg |>
 
 # update to make step_id unique to each elephant before fitting
 ele_trk_extract_etosha <- ele_trk_extract_etosha |>
-  mutate(step_id = paste(id, step_id, sep = "_"))
+  mutate(step_id_ = paste(id, step_id_, sep = "_"))
 
 ele_trk_extract_west <- ele_trk_extract_west |>
-  mutate(step_id = paste(id, step_id, sep = "_"))
+  mutate(step_id_ = paste(id, step_id_, sep = "_"))
 
 # Log-transform population density: raw variable data is heavily right-skewed
 # (99th pctile 0.27, max 9.5, driven by <20 near-settlement pixels).
@@ -497,9 +497,9 @@ ele_trk_extract_etosha_dry <- ele_trk_extract_etosha |>
   filter(season == "dry")
 
 ele_trk_extract_west_wet <- ele_trk_extract_west |> 
-  filter(season == "wet")
+ filter(season == "wet")
 ele_trk_extract_west_dry <- ele_trk_extract_west |> 
-  filter(season == "dry")
+ filter(season == "dry")
 ```
 
 
@@ -509,21 +509,22 @@ ele_trk_extract_west_dry <- ele_trk_extract_west |>
 
 ```{r}
 # etosha model
-m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist + water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_etosha_wet)
 
-m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist + water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
-
 summary(m0_etosha_dry)
 
 # western populations model
@@ -531,7 +532,7 @@ m0_west_wet <- ele_trk_extract_west_wet |> fit_clogit(case ~
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_west_wet)
 
@@ -539,11 +540,73 @@ m0_west_dry <- ele_trk_extract_west_dry |> fit_clogit(case ~
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_west_dry)
 
 ```
+
+```{r}
+model_fit_stats <- function(fit, label) {
+  tibble(
+    model    = label,
+    n_obs    = fit$model$n,
+    n_events = fit$model$nevent,
+    logLik   = as.numeric(logLik(fit$model)),
+    AIC      = AIC(fit$model),
+    BIC      = BIC(fit$model)
+  )
+}
+
+fit_candidate_set_etosha <- function(data, label) {
+  # restrict to rows with no NAs in ANY covariate used across the whole candidate set
+  # so every candidate model is fit on identical data
+  complete_data <- data |> 
+    drop_na(core_dist, fence_dist, road_dist, water_rivers_dist,
+            cropland_dist, grassland_dist, shrubland_dist, urban_dist, tree_cover_dist,
+            elevation, slope, aspect, evi, world_pop)
+  
+  full <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + fence_dist + road_dist + water_rivers_dist +
+      cropland_dist + grassland_dist + shrubland_dist + urban_dist + tree_cover_dist +
+      elevation + slope + aspect + evi + world_pop + strata(step_id_),
+    model = FALSE)
+
+  no_terrain <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + fence_dist + road_dist + water_rivers_dist +
+      cropland_dist + grassland_dist + shrubland_dist + urban_dist + tree_cover_dist +
+      evi + world_pop + strata(step_id_),
+    model = FALSE)
+
+  no_landcover_dist <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + fence_dist + road_dist + water_rivers_dist +
+      elevation + slope + aspect + evi + world_pop + strata(step_id_),
+    model = FALSE)
+
+  no_evi_pop <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + fence_dist + road_dist + water_rivers_dist +
+      cropland_dist + grassland_dist + shrubland_dist + urban_dist + tree_cover_dist +
+      elevation + slope + aspect + strata(step_id_),
+    model = FALSE)
+
+  bind_rows(
+    model_fit_stats(full, paste(label, "- Full")),
+    model_fit_stats(no_terrain, paste(label, "- No terrain")),
+    model_fit_stats(no_landcover_dist, paste(label, "- No LC distance")),
+    model_fit_stats(no_evi_pop, paste(label, "- No EVI/pop"))
+  ) |> 
+    mutate(delta_AIC = AIC - min(AIC),
+           delta_BIC = BIC - min(BIC))
+}
+
+etosha_candidate_comparison <- bind_rows(
+  fit_candidate_set_etosha(ele_trk_extract_etosha_wet, "Etosha Wet"),
+  fit_candidate_set_etosha(ele_trk_extract_etosha_dry, "Etosha Dry")
+)
+
+etosha_candidate_comparison
+```
+
 
 ```{r}
 #save model outputs
