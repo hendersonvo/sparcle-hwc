@@ -134,43 +134,7 @@ ele_etosha_reg <- resample_trk(ele_trk_etosha) |> filter(!is.na(sl_), sl_ > 0) |
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Step 3: Prepare raster stack for static covariates
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-```{r}
-file_paths <- c()
-
-gee_folder <- here("data", "500m_data")
-
-# create a vector of file paths to each raster
-# EVI and world population added manually later for each corresponding season/year
-
-for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "roads_distance_rast_500m.tif", "terrain_rast_500m.tif")]) {
-  file_paths <- c(file_paths, paste0(gee_folder,"/", file))
-}
-# set up for raster stack
-crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
-target_res <- 0.0045 # 500m resolution
-
-template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
-
-raster_list <- c()
-
-# create raster stack
-raster_list <- map(file_paths, function(fp) {
-  r <- rast(fp)                                                                 # turn file path into raster
-  project(r, template, method = "bilinear")                                     # project
-})
-
-raster_stack <- rast(raster_list)                                               # create stack from list
-
-# which(names(raster_stack) == "distance")
-names(raster_stack)[c(1:3)] <- c("core_dist", "fence_dist", "road_dist")
-```
-
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Step 4: Extracting covariates
+# Step 3: Extracting covariates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
@@ -390,7 +354,7 @@ extract_lc_dist <- function(ele_trk){
 
 
 linear_folder <- here("data", "Linear_features")
-linear_types <- c("hydrorivers")
+linear_types <- c("hydrorivers", "kaza_vet_fences", "roads")
 
 extract_linear <- function(ele_trk){
   new_trk <- ele_trk
@@ -398,23 +362,20 @@ extract_linear <- function(ele_trk){
   r_list <- list()
   
 # --- temporary
-  crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
-  target_res <- 0.0045 # 500m resolution
-  template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")  
+  crop_extent <- ext(12.5, 25.5, -21.5, -16.5) # (xmin, xmax, ymin, ymax)
+  target_res <- 0.0045 # 500m resolution c(0.00486170, 0.00451516)
+  template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 # --- end
   
   for(i in 1:length(linear_types)){
     feature <- linear_types[i]
-    r <- rast(paste0(linear_folder, "/", feature, "_Raster_corrected.tif"))
-    r <- project(r, template, method = "bilinear")
+    r <- rast(paste0(linear_folder, "/", feature, "_linear_500m.tif"))
+    r <- project(r, template, method = "near")
     names(r) <- paste0(feature, "_linear")
     r_list[[i]] <- r
   }
-
-# --- temporary
-  r_list[[2]] <- project(rast(paste0(here("data", "500m_data", "core_dist_rast_500m.tif"))), template, method = "bilinear")
+  
   r_stack <- rast(r_list)
-# --- end
   
   new_trk <- new_trk |> 
     mutate(linear_list = extract_covariates_along(new_trk, r_stack)) |> 
@@ -434,11 +395,11 @@ extract_linear <- function(ele_trk){
 
 ```{r}
 #test code
-test_slice <- head(ele_etosha_reg, n = 10000) |> 
-  extract_evi() |> 
-  extract_world_pop() |> 
-  extract_static() |> 
-  extract_lc_dist() |> 
+test_slice <- head(ele_etosha_reg, n = 10) |> 
+  # extract_evi() |> 
+  # extract_world_pop() |> 
+  # extract_static() |> 
+  # extract_lc_dist() |> 
   extract_linear()
   
 # this works!
@@ -504,7 +465,7 @@ ele_trk_extract_west_dry <- ele_trk_extract_west |>
 
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Step 5: Fitting the SSF
+# Step 4: Fitting the SSF
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
