@@ -456,10 +456,16 @@ m5_wet <- fit_ssf(ele_trk_extract_wet,
     fence_dist + river_dist + road_dist + elevation + slope + aspect +
     strata(step_id), model = FALSE)
 
-# 66: Nonlinear test on the key HEC distance variable via pspline
+# m6a: Nonlinear test on the key HEC distance variable via pspline
 library(survival)
-m6_wet <- fit_ssf(ele_trk_extract_wet,
+m6a_wet <- fit_ssf(ele_trk_extract_wet,
   case ~ pspline(core_dist) + water_dist + forest_dist + crop_dist +
+    built_dist + fence_dist + river_dist + road_dist + elevation +
+    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
+
+# M6b: nonlinearity test on crop_dist
+m6b_wet <- fit_ssf(ele_trk_extract_wet,
+  case ~ core_dist + water_dist + forest_dist + pspline(crop_dist) +
     built_dist + fence_dist + river_dist + road_dist + elevation +
     slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
 
@@ -474,6 +480,6 @@ compare_ssf_models <- function(...) {
     arrange(AIC)
 }
 
-compare_ssf_models(M1 = m1_dry, M2 = m2_dry, M3 = m3_dry,
-                    M4 = m4_dry, M5 = m5_dry, M6 = m6_dry)
+compare_ssf_models(M1 = m1_wet, M2 = m2_wet, M3 = m3_wet,
+                    M4 = m4_wet, M5 = m5_wet, M6a = m6a_wet, M6b = m6b_wet)
 ```

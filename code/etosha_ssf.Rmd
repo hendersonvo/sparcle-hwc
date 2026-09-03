@@ -472,10 +472,10 @@ ele_trk_extract_etosha <- ele_etosha_reg |>
 
 # update to make step_id unique to each elephant before fitting
 ele_trk_extract_etosha <- ele_trk_extract_etosha |>
-  mutate(step_id = paste(id, step_id, sep = "_"))
+  mutate(step_id_ = paste(id, step_id_, sep = "_"))
 
 ele_trk_extract_west <- ele_trk_extract_west |>
-  mutate(step_id = paste(id, step_id, sep = "_"))
+  mutate(step_id_ = paste(id, step_id_, sep = "_"))
 
 # Log-transform population density: raw variable data is heavily right-skewed
 # (99th pctile 0.27, max 9.5, driven by <20 near-settlement pixels).
@@ -497,9 +497,9 @@ ele_trk_extract_etosha_dry <- ele_trk_extract_etosha |>
   filter(season == "dry")
 
 ele_trk_extract_west_wet <- ele_trk_extract_west |> 
-  filter(season == "wet")
+ filter(season == "wet")
 ele_trk_extract_west_dry <- ele_trk_extract_west |> 
-  filter(season == "dry")
+ filter(season == "dry")
 ```
 
 
@@ -509,21 +509,22 @@ ele_trk_extract_west_dry <- ele_trk_extract_west |>
 
 ```{r}
 # etosha model
-m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist + water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_etosha_wet)
 
-m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist + water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
-
 summary(m0_etosha_dry)
 
 # western populations model
@@ -531,7 +532,7 @@ m0_west_wet <- ele_trk_extract_west_wet |> fit_clogit(case ~
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_west_wet)
 
@@ -539,11 +540,83 @@ m0_west_dry <- ele_trk_extract_west_dry |> fit_clogit(case ~
                                             core_dist + water_dist + forest_dist + crop_dist + 
                                             built_dist + fence_dist + river_dist + road_dist + 
                                             elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
+                                            evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_west_dry)
 
 ```
+
+```{r}
+## AIC/BIC model testing -- Etosha, both seasons
+library(survival)
+
+fit_etosha_candidates <- function(data, season_label) {
+  
+  # restrict to rows with no NAs in ANY covariate used across the whole data
+  complete_data <- data |> 
+    drop_na(core_dist, water_rivers_dist, tree_cover_dist, grassland_dist, shrubland_dist,
+            cropland_dist, urban_dist, fence_dist, road_dist,
+            elevation, slope, aspect, evi, world_pop)
+  
+  # m1: full model
+  m1 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  # m2: natural/landscape-only (drop human-pressure variables)
+  m2 <- complete_data |> fit_clogit(case_ ~ 
+      water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      elevation + slope + aspect + evi + strata(step_id_), model = FALSE)
+  
+  # m3: human-conflict-focused
+  m3 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + cropland_dist + urban_dist + road_dist + fence_dist +
+      world_pop + strata(step_id_), model = FALSE)
+  
+  # m4: full minus elevation (collinearity check)
+  m4 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  # m5: full minus EVI/world_pop -- static-only (no time-varying covariates)
+  m5 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + strata(step_id_), model = FALSE)
+  
+  # m6a: nonlinear test on the key HEC distance variable via pspline
+  m6a <- complete_data |> fit_clogit(case_ ~ 
+      pspline(core_dist) + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  # m6b: nonlinearity test on cropland_dist
+  m6b <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      pspline(cropland_dist) + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5, m6a = m6a, m6b = m6b)
+  
+  tibble(
+    season = season_label,
+    model  = names(models),
+    n_obs  = map_dbl(models, ~ .x$model$n),
+    AIC    = map_dbl(models, ~ AIC(.x$model)),
+    BIC    = map_dbl(models, ~ BIC(.x$model))
+  ) |> 
+    mutate(delta_AIC = AIC - min(AIC),
+           delta_BIC = BIC - min(BIC))
+}
+
+etosha_candidates_wet <- fit_etosha_candidates(ele_trk_extract_etosha_wet, "Etosha Wet")
+etosha_candidates_dry <- fit_etosha_candidates(ele_trk_extract_etosha_dry, "Etosha Dry")
+
+bind_rows(etosha_candidates_wet, etosha_candidates_dry)
+```
+
 
 ```{r}
 #save model outputs
