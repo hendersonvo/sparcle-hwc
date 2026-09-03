@@ -434,8 +434,7 @@ extract_linear <- function(ele_trk){
 
 ```{r}
 #test code
-test_slice <- head(ele_etosha_reg, n = 10) 
-test_slice <- test_slice |> 
+test_slice <- head(ele_etosha_reg, n = 10000) |> 
   extract_evi() |> 
   extract_world_pop() |> 
   extract_static() |> 
@@ -450,7 +449,8 @@ ele_trk_extract_etosha <- ele_etosha_reg |>
   extract_evi() |> 
   extract_world_pop() |> 
   extract_static() |> 
-  extract_lc_dist()
+  extract_lc_dist() |> 
+  extract_linear()
 ```
 
 
