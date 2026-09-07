@@ -38,3 +38,21 @@ landscape_coefs_wet <- coefs_wet[c("built_2020", "cropland_2020", "grassland_202
 # rss_wet <- exp(log_odds_wet)
 ```
 
+```{r}
+#Resistance sutface for Etosha wet/dry 
+
+library(terra)
+library(amt) 
+library(dplyr) 
+library(purrr) 
+library(here) 
+
+# 1. Covariate stack builder
+build_etosha_static_stack <- function() {
+  crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
+  target_res  <- 0.0045
+  template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+
+
+```
+
