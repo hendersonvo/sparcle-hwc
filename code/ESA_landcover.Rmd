@@ -1,0 +1,616 @@
+---
+title: "ESA_CCI_Land_cover"
+author: "Marissa Brenner"
+date: "2026-08-25"
+output: html_document
+---
+
+```{r}
+# =========================================================
+# Distance-to-land-cover rasters from ESA CCI / C3S LCCS data
+#
+# All years (2008-2020) are now .nc files, pre-cropped to the same
+# extent, with the land cover band named "lccs_class" in every file.
+#
+# All output rasters are:
+#   - cropped/aligned to a common extent
+#   - resampled to ~500 m resolution
+#   - kept in EPSG:4326 (matching the rest of the SSF covariates)
+#
+# Approach: for each land cover "group" (e.g. cropland), reclassify
+# the LC raster so cells matching that group's values = 1 and all
+# other cells = NA, then use terra::distance() to compute, for every
+# cell, the distance to the nearest cell belonging to that group.
+# Distance is computed at native (300 m) resolution first, then the
+# resulting continuous distance surface is resampled to the common
+# 500 m grid -- this is more accurate than downsampling the categorical
+# land cover first.
+#
+# NOTE: your source files are already clipped exactly to common_ext,
+# with no margin beyond it. That means there is no buffer available
+# for the distance calculation -- cells right at the edge of your
+# study area may look slightly farther from a class than they truly
+# are, if that class exists just outside the box but wasn't
+# downloaded. If you can re-request the files with ~0.5 deg of padding
+# on each side in the future, set buffer_deg below to take advantage
+# of it; for now it's 0 to match what you actually have.
+# =========================================================
+
+library(terra)
+
+# Give terra more RAM headroom and show progress bars on slow steps.
+# Default memfrac is 0.6 (60% of available RAM) -- bump it up a bit.
+terraOptions(memfrac = 0.9, progress = 1)
+
+# -----------------------------
+# 1. USER CONFIGURATION
+# -----------------------------
+
+# Folder containing the .nc files
+data_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS"          # <-- EDIT ME
+
+# Folder to write the distance-to rasters
+out_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS/landcover_distance"      # <-- EDIT ME
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Common study area extent: xmin, xmax, ymin, ymax
+common_ext <- ext(12.5, 25.5, -21.5, -16.5)
+common_crs <- "EPSG:4326"
+
+# Target output resolution, in meters (approximate -- see note in
+# build_template() below)
+target_res_m <- 500
+
+# OPTIONAL (recommended): path to an existing 500 m EPSG:4326 raster that
+# your other SSF covariates (e.g. from GEE) already use. If provided, the
+# distance rasters are resampled to align EXACTLY with it, so every
+# covariate shares one common grid. Leave as NULL to instead build a fresh
+# ~500 m grid from scratch over common_ext.
+template_file <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/500m_data/terrain_rast_500m.tif"
+
+# Buffer (in degrees) added around common_ext before computing distances.
+# Set to 0 -- your source files are already clipped to common_ext exactly,
+# so there is no extra margin to crop from. See note at the top of the
+# script if you're able to re-download with padding in the future.
+buffer_deg <- 0
+
+# -----------------------------
+# 2. LAND COVER GROUPS (THE ADJUSTABLE PART)
+# -----------------------------
+# Each entry = the NB_LAB codes (from ESACCI-LC-Legend.csv) that should
+# count as "present" for that distance-to raster. Add, remove, split,
+# or merge classes freely -- nothing else in the script needs to change.
+# Defaults below are a reasonable starting point based on the legend.
+
+lc_groups <- list(
+  cropland   = c(10, 12, 20, 30, 40),
+  tree_cover = c(50, 60, 61, 62, 70, 71, 72, 80, 81, 82, 90,
+                 100, 160, 170),
+  shrubland  = c(120, 121, 122, 180),
+  grassland  = c(110, 130),
+  urban      = c(190),
+  water      = c(210)
+)
+
+# -----------------------------
+# 3. FILE NAMING (EDIT IF YOUR FILENAMES DIFFER)
+# -----------------------------
+# 2008-2015 and 2016-2020 use different prefixes/version tags, but both
+# are .nc files with the land cover band named "lccs_class".
+
+years_v207 <- 2008:2015   # ESACCI-LC ... v2.0.7cds ...
+years_v211 <- 2016:2020   # C3S-LC ... v2.1.1 ...
+
+nc_path <- function(year) {
+  if (year %in% years_v207) {
+    file.path(data_dir,
+      sprintf("ESACCI-LC-L4-LCCS-Map-300m-P1Y-%d-v2.0.7cds.area-subset.-16.5.25.5.-21.5.12.5.nc",
+              year))
+  } else if (year %in% years_v211) {
+    file.path(data_dir,
+      sprintf("C3S-LC-L4-LCCS-Map-300m-P1Y-%d-v2.1.1.area-subset.-16.5.25.5.-21.5.12.5.nc",
+              year))
+  } else {
+    stop("Year ", year, " is not listed in years_v207 or years_v211")
+  }
+}
+
+# -----------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------
+
+# Read the land cover raster for a given year
+read_lc_raster <- function(year) {
+  f <- nc_path(year)
+  if (!file.exists(f)) stop("File not found: ", f)
+  # nc files hold several variables -- pull out just the land cover band
+  rast(f, subds = "lccs_class")
+}
+
+# Build (or load) the common output grid that every distance raster will
+# be resampled onto
+build_template <- function() {
+  if (!is.null(template_file)) {
+    if (!file.exists(template_file)) {
+      stop("Template file not found: ", template_file)
+    }
+    tmpl <- rast(template_file)
+    if (!same.crs(tmpl, common_crs)) {
+      warning("Template raster CRS is not EPSG:4326 -- reprojecting template.")
+      tmpl <- project(tmpl, common_crs)
+    }
+  } else {
+    # ~111,320 m per degree at the equator. This is an approximation --
+    # exact "500 m" cells aren't possible on a lon/lat grid since a degree
+    # of longitude shrinks toward the poles. Fine for a ~5 degree latitude
+    # band like this one; for exact alignment with your other 500 m GEE
+    # covariates, set template_file above instead.
+    res_deg <- target_res_m / 111320
+    tmpl <- rast(ext = common_ext, resolution = res_deg, crs = common_crs)
+  }
+  tmpl
+}
+
+target_template <- build_template()
+
+buffered_ext <- ext(common_ext[1] - buffer_deg, common_ext[2] + buffer_deg,
+                     common_ext[3] - buffer_deg, common_ext[4] + buffer_deg)
+
+# Build a "distance to <group>" raster for one year, on the common grid
+make_distance_raster <- function(lc_raster_buffered, values, group_name, year) {
+  # Reclassify: cells matching 'values' -> 1, everything else -> NA
+  rcl <- matrix(c(values, rep(1, length(values))), ncol = 2)
+  target <- classify(lc_raster_buffered, rcl = rcl, others = NA)
+
+  # distance() gives, per cell, the distance to the nearest non-NA cell.
+  # For geographic (lon/lat) rasters, terra computes this as geodesic
+  # distance in meters automatically.
+  dist_r <- distance(target)
+
+  # Crop away the buffer (a no-op when buffer_deg = 0)
+  dist_r <- crop(dist_r, common_ext)
+
+  # Resample (bilinear, since this is now a continuous surface) onto the
+  # common 500 m grid so it aligns with your other SSF covariates
+  dist_r <- resample(dist_r, target_template, method = "bilinear")
+
+  names(dist_r) <- paste0("dist_", group_name, "_", year)
+  dist_r
+}
+
+# -----------------------------
+# 5. MAIN LOOP
+# -----------------------------
+
+all_years <- c(years_v207, years_v211)
+
+for (yr in all_years) {
+
+  message("Processing year ", yr, " ...")
+  lc <- read_lc_raster(yr)
+
+  # Crop to the (possibly buffered) extent -- reused across all groups
+  lc <- crop(lc, buffered_ext)
+
+  # Force fully into RAM once, instead of re-reading from disk per group
+  t0 <- Sys.time()
+  lc <- toMemory(lc)
+  message("  Loaded into memory in ", round(difftime(Sys.time(), t0, units = "secs"), 1), " sec")
+
+  for (grp in names(lc_groups)) {
+
+    out_file <- file.path(out_dir, paste0("dist_", grp, "_", yr, ".tif"))
+
+    if (file.exists(out_file)) {
+      message("  Skipping ", grp, " (already exists)")
+      next
+    }
+
+    t1 <- Sys.time()
+    message("  -> distance to ", grp, " ...")
+    dist_r <- make_distance_raster(lc, lc_groups[[grp]], grp, yr)
+    writeRaster(dist_r, out_file, overwrite = TRUE)
+    message("     done in ", round(difftime(Sys.time(), t1, units = "mins"), 2), " min")
+  }
+
+  rm(lc)  # free memory before moving to next year
+}
+
+message("Done. Distance rasters written to: ", out_dir)
+```
+
+```{r}
+# =========================================================
+# Optimized Distance-to-land-cover rasters from ESA CCI / C3S LCCS data
+# =========================================================
+library(terra)
+
+terraOptions(memfrac = 0.9, progress = 1)
+
+# -----------------------------
+# 1. USER CONFIGURATION
+# -----------------------------
+data_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS"
+out_dir  <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS/lc_dist_2"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+common_ext   <- ext(12.5, 25.5, -21.5, -16.5)
+common_crs   <- "EPSG:4326"
+target_res_m <- 500
+template_file <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/500m_data/terrain_rast_500m.tif"
+buffer_deg   <- 0
+
+# AUTOMATIC METRIC CRS SELECTION (UTM Zone 34S matches center of your coordinates)
+# Distance calculations in UTM are massively faster than geodesic math in EPSG:4326
+metric_crs   <- "EPSG:32734" 
+
+# -----------------------------
+# 2. LAND COVER GROUPS
+# -----------------------------
+lc_groups <- list(
+  cropland   = c(10, 12, 20, 30, 40),
+  tree_cover = c(50, 60, 61, 62, 70, 71, 72, 80, 81, 82, 90, 100, 160, 170),
+  shrubland  = c(120, 121, 122, 180),
+  grassland  = c(110, 130),
+  urban      = c(190),
+  water      = c(210)
+)
+
+# -----------------------------
+# 3. FILE NAMING
+# -----------------------------
+years_v207 <- 2008:2015
+years_v211 <- 2016:2020
+
+nc_path <- function(year) {
+  if (year %in% years_v207) {
+    file.path(data_dir, sprintf("ESACCI-LC-L4-LCCS-Map-300m-P1Y-%d-v2.0.7cds.area-subset.-16.5.25.5.-21.5.12.5.nc", year))
+  } else if (year %in% years_v211) {
+    file.path(data_dir, sprintf("C3S-LC-L4-LCCS-Map-300m-P1Y-%d-v2.1.1.area-subset.-16.5.25.5.-21.5.12.5.nc", year))
+  } else {
+    stop("Year ", year, " is not listed.")
+  }
+}
+
+# -----------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------
+read_lc_raster <- function(year) {
+  f <- nc_path(year)
+  if (!file.exists(f)) stop("File not found: ", f)
+  rast(f, subds = "lccs_class")
+}
+
+build_template <- function() {
+  if (!is.null(template_file)) {
+    if (!file.exists(template_file)) stop("Template file not found: ", template_file)
+    tmpl <- rast(template_file)
+    if (!same.crs(tmpl, common_crs)) {
+      warning("Template raster CRS is not EPSG:4326 -- reprojecting template.")
+      tmpl <- project(tmpl, common_crs)
+    }
+  } else {
+    res_deg <- target_res_m / 111320
+    tmpl <- rast(ext = common_ext, resolution = res_deg, crs = common_crs)
+  }
+  tmpl
+}
+
+target_template <- build_template()
+buffered_ext    <- ext(common_ext[1] - buffer_deg, common_ext[2] + buffer_deg, common_ext[3] - buffer_deg, common_ext[4] + buffer_deg)
+
+make_distance_raster_fast <- function(lc_raster_metric, values, group_name, year) {
+  # Reclassify on the metric grid
+  rcl <- matrix(c(values, rep(1, length(values))), ncol = 2)
+  target <- classify(lc_raster_metric, rcl = rcl, others = NA)
+  
+  # Fast flat metric distance evaluation
+  dist_r_metric <- distance(target)
+  
+  # Project the high-res metric distance surface directly back to your EPSG:4326 template
+  # This combines cropping, reprojection, and 500m resampling into one step!
+  dist_r <- project(dist_r_metric, target_template, method = "bilinear")
+  
+  names(dist_r) <- paste0("dist_", group_name, "_", year)
+  dist_r
+}
+
+# -----------------------------
+# 5. MAIN LOOP
+# -----------------------------
+all_years <- c(years_v207, years_v211)
+
+for (yr in all_years) {
+  message("Processing year ", yr, " ...")
+  lc <- read_lc_raster(yr)
+  lc <- crop(lc, buffered_ext)
+  
+  # Project the categorical grid to Metric ONCE per year
+  t0 <- Sys.time()
+  lc_metric <- project(lc, metric_crs, method = "near")
+  lc_metric <- toMemory(lc_metric)
+  message(" Projected to metric and loaded to RAM in ", round(difftime(Sys.time(), t0, units = "secs"), 1), " sec")
+  
+  for (grp in names(lc_groups)) {
+    out_file <- file.path(out_dir, paste0("dist_", grp, "_", yr, ".tif"))
+    if (file.exists(out_file)) {
+      message(" Skipping ", grp, " (already exists)")
+      next
+    }
+    
+    t1 <- Sys.time()
+    message(" -> distance to ", grp, " ...")
+    dist_r <- make_distance_raster_fast(lc_metric, lc_groups[[grp]], grp, yr)
+    writeRaster(dist_r, out_file, overwrite = TRUE)
+    message(" done in ", round(difftime(Sys.time(), t1, units = "secs"), 2), " secs")
+  }
+  rm(lc_metric)
+}
+
+message("Done. Distance rasters written to: ", out_dir)
+
+```
+```{r}
+# =========================================================
+# Distance-to-water rasters (2008-2020), combining:
+# (a) the static hydrorivers_Raster.tif (values 1, 2, 3 = river)
+# (b) each year's ESA CCI / C3S LCCS land-cover water class (210)
+# Output: one "dist_water_<year>.tif" per year, 500 m, EPSG:4326, aligned to your other SSF covariates via template_file.
+
+
+library(terra)
+
+terraOptions(memfrac = 0.9, progress = 1)
+
+# -----------------------------
+# 1. USER CONFIGURATION
+# -----------------------------
+
+# Folder containing the land cover .nc files
+data_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS"          # <-- EDIT ME
+
+# Path to your static hydrorivers raster
+hydro_file <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/Linear_features/hydrorivers_Raster_corrected.tif" 
+
+# Folder to write the distance-to-water rasters
+out_dir <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/ESACCI_LCCS"   # <-- EDIT ME
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Common study area extent: xmin, xmax, ymin, ymax
+common_ext <- ext(12.5, 25.5, -21.5, -16.5)
+common_crs <- "EPSG:4326"
+
+# Target output resolution, in meters (only used if template_file is NULL)
+target_res_m <- 500
+
+# Existing 500 m EPSG:4326 raster your other SSF covariates already use --
+# everything gets resampled to align EXACTLY with this
+template_file <- "~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/500m_data/terrain_rast_500m.tif"
+
+# Buffer (in degrees) around common_ext before computing distances.
+buffer_deg <- 0
+
+# Metric CRS for fast, flat-plane distance math (UTM 34S -- matches the
+# rest of your pipeline for this region)
+metric_crs <- "EPSG:32734"
+
+# Values that count as "water" in each source
+hydro_river_values <- c(1, 2, 3)   # hydrorivers_Raster.tif
+lc_water_value <- 210          # ESA CCI / C3S LCCS "water bodies" class
+
+# -----------------------------
+# 2. FILE NAMING (land cover .nc files)
+# -----------------------------
+
+years_v207 <- 2008:2015   # ESACCI-LC ... v2.0.7cds ...
+years_v211 <- 2016:2020   # C3S-LC ... v2.1.1 ...
+
+nc_path <- function(year) {
+  if (year %in% years_v207) {
+    file.path(data_dir,
+      sprintf("ESACCI-LC-L4-LCCS-Map-300m-P1Y-%d-v2.0.7cds.area-subset.-16.5.25.5.-21.5.12.5.nc",
+              year))
+  } else if (year %in% years_v211) {
+    file.path(data_dir,
+      sprintf("C3S-LC-L4-LCCS-Map-300m-P1Y-%d-v2.1.1.area-subset.-16.5.25.5.-21.5.12.5.nc",
+              year))
+  } else {
+    stop("Year ", year, " is not listed in years_v207 or years_v211")
+  }
+}
+
+read_lc_raster <- function(year) {
+  f <- nc_path(year)
+  if (!file.exists(f)) stop("File not found: ", f)
+  rast(f, subds = "lccs_class")
+}
+
+# -----------------------------
+# 3. HELPER FUNCTIONS
+# -----------------------------
+
+build_template <- function() {
+  if (!is.null(template_file)) {
+    if (!file.exists(template_file)) stop("Template file not found: ", template_file)
+    tmpl <- rast(template_file)
+    if (!same.crs(tmpl, common_crs)) {
+      warning("Template raster CRS is not EPSG:4326 -- reprojecting template.")
+      tmpl <- project(tmpl, common_crs)
+    }
+  } else {
+    res_deg <- target_res_m / 111320
+    tmpl <- rast(ext = common_ext, resolution = res_deg, crs = common_crs)
+  }
+  tmpl
+}
+
+target_template <- build_template()
+
+buffered_ext <- ext(common_ext[1] - buffer_deg, common_ext[2] + buffer_deg,
+                     common_ext[3] - buffer_deg, common_ext[4] + buffer_deg)
+
+# Reclassify a set of values to a 1/NA presence raster
+to_presence <- function(r, values) {
+  rcl <- matrix(c(values, rep(1, length(values))), ncol = 2)
+  classify(r, rcl = rcl, others = NA)
+}
+
+# Project a lon/lat SpatExtent into another CRS (used to crop hydrorivers
+# to the study area in its own native CRS before touching it further)
+project_ext <- function(e, from_crs, to_crs) {
+  v  <- as.polygons(e, crs = from_crs)
+  vp <- project(v, to_crs)
+  ext(vp)
+}
+
+# =========================================================
+# 4. STATIC: distance-to-hydrorivers, computed ONCE
+#    (identical every year, so this happens outside the year loop
+#    and is cached to disk)
+# =========================================================
+
+dist_hydro_file <- file.path(out_dir, "dist_water_rivers.tif")
+
+if (file.exists(dist_hydro_file)) {
+
+  message("Loading cached distance-to-hydrorivers raster ...")
+  dist_hydro_final <- rast(dist_hydro_file)
+
+} else {
+
+  message("Building distance-to-hydrorivers raster (one-time) ...")
+  hydro_r <- rast(hydro_file)
+  message("  hydrorivers_Raster.tif -> resolution: ",
+          paste(signif(res(hydro_r), 6), collapse = " x "),
+          " | CRS: ", crs(hydro_r, proj = TRUE))
+
+  # Crop to the study area first, in the hydro raster's OWN crs, so we
+  # never reproject more of it than necessary
+  crop_ext_native <- project_ext(buffered_ext, common_crs, crs(hydro_r))
+  hydro_r <- crop(hydro_r, crop_ext_native)
+
+  hydro_bin <- to_presence(hydro_r, hydro_river_values)
+
+  # Move to a metric CRS for fast distance math
+  hydro_metric <- project(hydro_bin, metric_crs, method = "near")
+  hydro_metric <- toMemory(hydro_metric)
+
+  dist_hydro_metric <- distance(hydro_metric)
+
+  # Straight onto the final 500 m EPSG:4326 template
+  dist_hydro_final <- project(dist_hydro_metric, target_template, method = "bilinear")
+  names(dist_hydro_final) <- "dist_hydrorivers"
+
+  writeRaster(dist_hydro_final, dist_hydro_file, overwrite = TRUE)
+  rm(hydro_r, hydro_bin, hydro_metric, dist_hydro_metric)
+}
+
+# =========================================================
+# 5. PER YEAR: distance-to-water-landcover, combined with the
+#    static distance-to-hydrorivers via a cell-wise minimum
+# =========================================================
+
+all_years <- c(years_v207, years_v211)
+
+for (yr in all_years) {
+
+  out_file <- file.path(out_dir, paste0("dist_water_", yr, ".tif"))
+  if (file.exists(out_file)) {
+    message("Skipping ", yr, " (already exists)")
+    next
+  }
+
+  message("Processing year ", yr, " ...")
+  lc <- read_lc_raster(yr)
+  lc <- crop(lc, buffered_ext)
+
+  t0 <- Sys.time()
+  lc_metric <- project(lc, metric_crs, method = "near")
+  lc_metric <- toMemory(lc_metric)
+  message("  Projected to metric and loaded to RAM in ",
+          round(difftime(Sys.time(), t0, units = "secs"), 1), " sec")
+
+  lc_water_bin   <- to_presence(lc_metric, lc_water_value)
+  dist_lc_metric <- distance(lc_water_bin)
+  dist_lc_final  <- project(dist_lc_metric, target_template, method = "bilinear")
+
+  # Cell-wise minimum = distance to the nearest EITHER source (river or
+  # water-cover cell) -- mathematically the same as distance to their union
+ combined <- min(dist_lc_final, dist_hydro_final, na.rm = TRUE)
+  names(combined) <- paste0("dist_water_", yr)
+
+  writeRaster(combined, out_file, overwrite = TRUE)
+  message("  done -> ", out_file)
+
+  rm(lc, lc_metric, lc_water_bin, dist_lc_metric, dist_lc_final, combined)
+}
+
+message("Done. Distance-to-water rasters written to: ", out_dir)
+```
+
+```{r}
+print(ext(target_template))       # what the final grid's extent actually is
+print(ext(common_ext))            # what you asked for
+print(crs(rast(hydro_file)))      # hydrorivers' own CRS
+print(ext(rast(hydro_file)))      # hydrorivers' own extent, in its own CRS
+```
+
+```{r}
+library(terra)
+
+# Allow GDAL to rebuild missing/corrupted .shx index files automatically
+Sys.setenv(SHAPE_RESTORE_SHX = "YES")
+
+#Settings
+res_m <- 500
+ext_ll <- c(xmin = 12.5, ymin = -21.5, xmax = 25.5, ymax = -16.5) # lon/lat extent
+crs_ll <- "EPSG:4326"
+
+# Recommended: work in a projected CRS so 500 really means 500 metres.
+# UTM zone 33S covers Namibia/most of KAZA (EPSG:32733).
+target_crs <- "EPSG:32733"
+
+# Input/output setup
+in_dir  <- path.expand("~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/Linear_features")
+out_dir <- path.expand("~/Desktop/Arnhold/sparcle-hwc-old2/code/sparcle-hwc/data/Linear_features")
+
+files <- c(
+  "hydrorivers_namibia_gte5.shp",
+  "KAZA_vet_fences_exported.shp",
+  "roads_selected_exported.shp"
+)
+
+# Build the template raster once, in the projected CRS, so all three
+# outputs align to the same grid 
+ext_vec    <- vect(ext(ext_ll["xmin"], ext_ll["xmax"], ext_ll["ymin"], ext_ll["ymax"]), crs = crs_ll)
+ext_proj   <- project(ext_vec, target_crs)
+r_template <- rast(ext(ext_proj), resolution = res_m, crs = target_crs)
+
+#Loop over the three files
+for (f in files) {
+  message("Processing: ", f)
+  shp_path <- file.path(in_dir, f)
+  lines <- vect(shp_path)
+  
+  # Reproject lines to match the template CRS 
+  if (crs(lines) != crs(r_template)) {
+    lines <- project(lines, crs(r_template))
+  }
+  
+  #fix:  fun = "max" forces any cell touched by a line to strictly become 1
+  r_out <- rasterize(lines, r_template, field = 1, background = 0, touches = TRUE, fun = "max")
+  
+  out_name <- paste0(tools::file_path_sans_ext(basename(f)), "_500m.tif")
+  
+  # fix: datatype = "INT1U" saves the output strictly as integers (0 and 1)
+  writeRaster(r_out, file.path(out_dir, out_name), datatype = "INT1U", overwrite = TRUE)
+  
+  message(" -> wrote ", out_name)
+}
+
+message("Done.")
+```
+
+
+```
+
