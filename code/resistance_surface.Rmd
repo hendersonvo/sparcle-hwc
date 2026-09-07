@@ -39,20 +39,154 @@ landscape_coefs_wet <- coefs_wet[c("built_2020", "cropland_2020", "grassland_202
 ```
 
 ```{r}
+# ------------------------------------------------------------
 #Resistance sutface for Etosha wet/dry 
+# ------------------------------------------------------------
 
+library(tidyverse)
 library(terra)
-library(amt) 
-library(dplyr) 
-library(purrr) 
-library(here) 
+library(here)
 
-# 1. Covariate stack builder
-build_etosha_static_stack <- function() {
-  crop_extent <- ext(12.5, 25.5, -21.5, -16.5)
-  target_res  <- 0.0045
-  template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+# 0. Configuring
+# ------------------------------------------------------------
+pop_label   <- "etosha"
+years_range <- 2008:2020
+ 
+gee_folder      <- here("data", "500m_data")
+lc_dist_folder  <- here("data", "ESACCI_LCCS", "lc_dist_2")
+evi_folder      <- here("data", "500m_data", "EVI data")
+model_folder    <- here("outputs")
+out_folder      <- here("outputs", "resistance_surfaces")
+dir.create(out_folder, showWarnings = FALSE, recursive = TRUE)
+ 
+lc_types    <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water_rivers")
+wet_months  <- c(1:4, 11:12)
+dry_months  <- c(5:10)
+ 
+crop_extent <- ext(12.5, 25.5, -21.5, -16.5)   # matches SSF extraction extent
+target_res  <- 0.0045                          # ~500m
+template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
+# 1. Load fitted SSF modles
+# ------------------------------------------------------------
+ 
+m0_etosha_wet <- readRDS(file.path(model_folder, "m0_etosha_wet.rds"))
+m0_etosha_dry <- readRDS(file.path(model_folder, "m0_etosha_dry.rds"))
+
+# 2. Build static covariate raster (seaonal)
+# ------------------------------------------------------------
+build_static_stack <- function() {
+ 
+  static_files <- c(
+    core_dist  = file.path(gee_folder, "core_dist_rast_500m_new.tif"),
+    fence_dist = file.path(gee_folder, "fences_dist_rast_500m.tif"),
+    road_dist  = file.path(gee_folder, "roads_distance_rast_500m.tif")
+  )
+ 
+  r_list <- map(static_files, ~ project(rast(.x), template, method = "bilinear"))
+  r_stack <- rast(r_list)
+  names(r_stack) <- names(static_files)
+ 
+  terrain_r <- rast(file.path(gee_folder, "terrain_rast_500m.tif"))
+  terrain_r <- project(terrain_r, template, method = "bilinear")
+  
+#confirm terrain layer names match what the model expects
+# (elevation, slope, aspect) -- rename here if the .tif uses different names
+  message("Terrain layer names found: ", paste(names(terrain_r), collapse = ", "))
+ 
+  c(r_stack, terrain_r)
+}
+
+# 3. Build land-cover distance stack, average across year 
+# ------------------------------------------------------------
+build_lc_dist_mean <- function(years = years_range) {
+ 
+  yearly_stacks <- map(years, function(yr) {
+    r_list <- map(lc_types, function(lc) {
+      fp <- file.path(lc_dist_folder, paste0("dist_", lc, "_", yr, ".tif"))
+      if (!file.exists(fp)) return(NULL)
+      project(rast(fp), template, method = "bilinear")
+    })
+    r_list <- compact(r_list) 
+    if (length(r_list) == 0) return(NULL)
+    r <- rast(r_list)
+    names(r) <- paste0(lc_types[seq_along(r_list)], "_dist")
+    r
+  })
+  yearly_stacks <- compact(yearly_stacks)
+ 
+  # mean across years, per land-cover type
+  lc_mean <- rast(map(lc_types, function(lc) {
+    layer_name <- paste0(lc, "_dist")
+    layers_for_type <- rast(map(yearly_stacks, function(s) {
+      if (layer_name %in% names(s)) s[[layer_name]] else NULL
+    }) |> compact())
+    mean(layers_for_type, na.rm = TRUE)
+  }))
+  names(lc_mean) <- paste0(lc_types, "_dist")
+  lc_mean
+}
+
+# 4. Build EVI mean surface for given season
+# ------------------------------------------------------------
+ 
+build_evi_mean <- function(season, years = years_range) {
+ 
+  if (season == "dry") {
+    r_list <- map(years, function(yr) {
+      fp <- file.path(evi_folder, paste0("evi_dry_", yr, ".tif"))
+      if (!file.exists(fp)) return(NULL)
+      r <- project(rast(fp), template, method = "bilinear")
+      names(r) <- "evi"
+      r
+    })
+  } else {
+    # wet season files span year boundaries: evi_wet_(yr-1)_(yr).tif
+    r_list <- map(years, function(yr) {
+      fp <- file.path(evi_folder, paste0("evi_wet_", yr - 1, "_", yr, ".tif"))
+      if (!file.exists(fp)) return(NULL)
+      r <- project(rast(fp), template, method = "bilinear")
+      names(r) <- "evi"
+      r
+    })
+  }
+  r_list <- compact(r_list)
+  r_stack <- rast(r_list)
+  evi_mean <- mean(r_stack, na.rm = TRUE)
+  names(evi_mean) <- "evi"
+  evi_mean
+}
+
+# 5. Build population mean surface across years
+# ------------------------------------------------------------
+ 
+build_world_pop_mean <- function(years = years_range) {
+  world_pop <- rast(file.path(gee_folder, "worldPop_comb_img_500m.tif"))
+  world_pop <- project(world_pop, template, method = "bilinear")
+  world_pop_list <- split(world_pop, 1:nlyr(world_pop))
+ 
+  layer_idx <- years - 1999  # matches indexing used in the SSF extraction script
+  layer_idx <- layer_idx[layer_idx >= 1 & layer_idx <= length(world_pop_list)]
+ 
+  pop_stack <- rast(world_pop_list[layer_idx])
+  pop_mean <- mean(pop_stack, na.rm = TRUE)
+  names(pop_mean) <- "world_pop"
+  pop_mean
+}
+
+# 6. Assemble the full covariate stack for one season
+# ------------------------------------------------------------
+ 
+build_covariate_stack <- function(season) {
+  static_stack  <- build_static_stack()
+  lc_stack      <- build_lc_dist_mean()
+  evi_stack     <- build_evi_mean(season)
+  pop_stack     <- build_world_pop_mean()
+ 
+  full_stack <- c(static_stack, lc_stack, evi_stack, pop_stack)
+  full_stack
+}
 
 ```
+
 
