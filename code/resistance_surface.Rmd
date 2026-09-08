@@ -63,8 +63,8 @@ lc_types    <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "w
 wet_months  <- c(1:4, 11:12)
 dry_months  <- c(5:10)
  
-crop_extent <- ext(12.5, 25.5, -21.5, -16.5)   # matches SSF extraction extent
-target_res  <- 0.0045                          # ~500m
+crop_extent <- ext(12.5, 25.5, -21.5, -16.5) 
+target_res  <- 0.0045 # 500m in degrees 
 template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
 # 1. Load fitted SSF modles
@@ -89,13 +89,6 @@ build_static_stack <- function() {
  
   terrain_r <- rast(file.path(gee_folder, "terrain_rast_500m.tif"))
   terrain_r <- project(terrain_r, template, method = "bilinear")
-  
-#confirm terrain layer names match what the model expects
-# (elevation, slope, aspect) -- rename here if the .tif uses different names
-  message("Terrain layer names found: ", paste(names(terrain_r), collapse = ", "))
- 
-  c(r_stack, terrain_r)
-}
 
 # 3. Build land-cover distance stack, average across year 
 # ------------------------------------------------------------
@@ -115,7 +108,7 @@ build_lc_dist_mean <- function(years = years_range) {
   })
   yearly_stacks <- compact(yearly_stacks)
  
-  # mean across years, per land-cover type
+  #mean across years, per land-cover type
   lc_mean <- rast(map(lc_types, function(lc) {
     layer_name <- paste0(lc, "_dist")
     layers_for_type <- rast(map(yearly_stacks, function(s) {
@@ -165,7 +158,7 @@ build_world_pop_mean <- function(years = years_range) {
   world_pop <- project(world_pop, template, method = "bilinear")
   world_pop_list <- split(world_pop, 1:nlyr(world_pop))
  
-  layer_idx <- years - 1999  # matches indexing used in the SSF extraction script
+  layer_idx <- years - 1999  #matches indexing used in the SSF extraction script
   layer_idx <- layer_idx[layer_idx >= 1 & layer_idx <= length(world_pop_list)]
  
   pop_stack <- rast(world_pop_list[layer_idx])
