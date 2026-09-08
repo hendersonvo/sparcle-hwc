@@ -190,7 +190,6 @@ build_covariate_stack <- function(season) {
 # 7. Predict linear predictor / RSS from model coefficients
 # -----------------------------------------------------------
 
-
 ```
 
 
