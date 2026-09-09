@@ -123,6 +123,8 @@ set.seed(123)
 # Resample based on elephant ID 
 ele_etosha_reg <- resample_trk(ele_trk_etosha) |> filter(!is.na(sl_), sl_ > 0) |>  random_steps_by_id()
 ele_west_reg <- resample_trk(ele_trk_west) |> filter(!is.na(sl_), sl_ > 0) |> random_steps_by_id()
+#ele_west_reg <- resample_trk(ele_trk_west) |> random_steps_by_id()
+
 
 #ele_dry_reg <- resample_trk(ele_trk_dry)
 #ele_wet_reg <- resample_trk(ele_trk_wet)
