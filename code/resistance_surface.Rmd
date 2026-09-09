@@ -90,6 +90,7 @@ build_static_stack <- function() {
   terrain_r <- rast(file.path(gee_folder, "terrain_rast_500m.tif"))
   terrain_r <- project(terrain_r, template, method = "bilinear")
 }
+
 # 3. Build land-cover distance stack, average across year 
 # ------------------------------------------------------------
 build_lc_dist_mean <- function(years = years_range) {
@@ -167,7 +168,7 @@ build_world_pop_mean <- function(years = years_range) {
   pop_mean
 }
 
-# 6. Assemble the full covariate stack for one season
+# 6. Full covariate stack for one season
 # ------------------------------------------------------------
  
 build_covariate_stack <- function(season) {
@@ -182,6 +183,7 @@ build_covariate_stack <- function(season) {
 
 # 7. Predict linear predictor / RSS from model coefficients
 # -----------------------------------------------------------
+
 
 ```
 
