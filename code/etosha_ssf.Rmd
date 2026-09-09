@@ -100,7 +100,7 @@ resample_trk <- function(trk) {
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
-      track_resample(rate = hours(6), tolerance = minutes(15)) |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
       steps_by_burst()
   })) |>
   # select id and steps column
@@ -122,7 +122,7 @@ random_steps_by_id <- function(reg_trk) {
 set.seed(123)
 # Resample based on elephant ID 
 ele_etosha_reg <- resample_trk(ele_trk_etosha) |> filter(!is.na(sl_), sl_ > 0) |>  random_steps_by_id()
-#ele_west_reg <- resample_trk(ele_trk_west) |> random_steps_by_id()
+ele_west_reg <- resample_trk(ele_trk_west) |> filter(!is.na(sl_), sl_ > 0) |> random_steps_by_id()
 
 #ele_dry_reg <- resample_trk(ele_trk_dry)
 #ele_wet_reg <- resample_trk(ele_trk_wet)
@@ -140,8 +140,9 @@ ele_etosha_reg <- resample_trk(ele_trk_etosha) |> filter(!is.na(sl_), sl_ > 0) |
 ```{r}
 # Static layer extraction 
 
+gee_folder <- here("data", "500m_data")
+
 extract_static <- function(ele_trk){
-  gee_folder <- here("data", "500m_data")
   file_paths <- c()
 
   for (file in list.files(gee_folder)[list.files(gee_folder) %in% c("core_dist_rast_500m.tif", "fences_dist_rast_500m.tif", "roads_distance_rast_500m.tif")]) {
@@ -186,10 +187,11 @@ extract_static <- function(ele_trk){
 ```{r}
 # EVI extraction loop
 
+evi_folder <- here("data", "500m_data", "EVI data")
+wet_months <- c(1:4, 11:12)
+dry_months <- c(5:10)
+
 extract_evi <- function(ele_trk) {
-  evi_folder <- here("data", "500m_data", "EVI data")
-  wet_months <- c(1:4, 11:12)
-  dry_months <- c(5:10)
   
   if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
     return(ele_trk)
@@ -265,10 +267,10 @@ extract_evi <- function(ele_trk) {
 ```{r}
 # World population extraction loop
 
+world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
+world_pop_list <- split(world_pop, 1:nlyr(world_pop))
+
 extract_world_pop <- function(ele_trk){
-  world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
-  world_pop_list <- split(world_pop, 1:nlyr(world_pop))
-  
   ele_trk_mutated <- ele_trk
   if(!"year" %in% colnames(ele_trk)){
     ele_trk_mutated <- ele_trk_mutated |>
@@ -304,10 +306,10 @@ extract_world_pop <- function(ele_trk){
 ```{r}
 # Land cover dist extraction
 
+lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water_rivers")
+lc_dist_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
+
 extract_lc_dist <- function(ele_trk){
-  lc_types <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water_rivers")
-  lc_dist_folder <- here("data", "ESACCI_LCCS", "lc_dist_2")
-  
   ele_trk_mutated <- ele_trk
   if(!"year" %in% colnames(ele_trk)){
     ele_trk_mutated <- ele_trk_mutated |>
@@ -349,17 +351,21 @@ extract_lc_dist <- function(ele_trk){
 
 ```{r}
 # Linear feature extraction
-extract_linear <- function(ele_trk){
-  linear_folder <- here("data", "Linear_features")
-  linear_types <- c("hydrorivers", "kaza_vet_fences", "roads")
 
+
+linear_folder <- here("data", "Linear_features")
+linear_types <- c("hydrorivers", "kaza_vet_fences", "roads")
+
+extract_linear <- function(ele_trk){
   new_trk <- ele_trk
   
   r_list <- list()
   
+# --- temporary
   crop_extent <- ext(12.5, 25.5, -21.5, -16.5) # (xmin, xmax, ymin, ymax)
   target_res <- 0.0045 # 500m resolution c(0.00486170, 0.00451516)
   template <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+# --- end
   
   for(i in 1:length(linear_types)){
     feature <- linear_types[i]
@@ -400,12 +406,57 @@ test_slice <- head(ele_etosha_reg, n = 10) |>
 ```
 
 ```{r}
-ele_trk_extract_etosha <- ele_etosha_reg |> 
-  extract_evi() |> 
-  extract_world_pop() |> 
-  extract_static() |> 
-  extract_lc_dist() |> 
-  extract_linear()
+#ele_trk_extract_etosha <- ele_etosha_reg |> 
+ # extract_evi() |> 
+#  extract_world_pop() |> 
+#  extract_static() |> 
+ # extract_lc_dist() |> 
+#  extract_linear()
+
+
+batch_size <- 50000
+n_total <- nrow(ele_etosha_reg)
+n_batches <- ceiling(n_total / batch_size)
+
+pipeline_dir <- here("data", "batch_output_full_pipeline")
+dir.create(pipeline_dir, showWarnings = FALSE)
+
+failed_batches <- c()
+
+for (i in seq_len(n_batches)) {
+  out_path <- file.path(pipeline_dir, paste0("pipeline_batch_", sprintf("%04d", i), ".rds"))
+  if (file.exists(out_path)) {
+    cat("Batch", i, "of", n_batches, "already exists, skipping.\n")
+    next
+  }
+  
+  start_row <- (i - 1) * batch_size + 1
+  end_row <- min(i * batch_size, n_total)
+  batch <- ele_etosha_reg[start_row:end_row, ]
+  
+  result <- tryCatch({
+    batch |> 
+      extract_evi() |> 
+      extract_world_pop() |> 
+      extract_static() |> 
+      extract_lc_dist() |> 
+      extract_linear()
+  }, error = function(e) {
+    cat("BATCH", i, "FAILED (rows", start_row, "-", end_row, "):", conditionMessage(e), "\n")
+    failed_batches <<- c(failed_batches, i)
+    NULL
+  })
+  
+  if (!is.null(result)) {
+    saveRDS(result, out_path)
+    cat("Batch", i, "of", n_batches, "done (rows", start_row, "-", end_row, ")\n")
+  }
+  
+  rm(batch, result)
+  gc()
+}
+
+cat("\nFailed batches:", paste(failed_batches, collapse = ", "), "\n")
 ```
 
 
