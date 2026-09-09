@@ -392,60 +392,61 @@ compare_ssf_models(M1 = m1_dry, M2 = m2_dry, M3 = m3_dry,
                     M4 = m4_dry, M5 = m5_dry, M6 = m6_dry)
 ```
 ```{r}
-# AIC model testing for wet season
-
-# m1: Full model
-m1_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m2: Natural/landscape-only (drop human-pressure variables)
-m2_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ water_dist + forest_dist + elevation + slope + aspect +
-    evi + strata(step_id), model = FALSE)
-
-# m3: Human-conflict-focused 
-m3_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + crop_dist + built_dist + road_dist + fence_dist +
-    world_pop + strata(step_id), model = FALSE)
-
-# m4: Full minus terrain (drop elevation due to collinearity)
-m4_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + slope + aspect +
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m5: Full minus EVI/world_pop (static-only, no time-varying covariates)
-m5_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    strata(step_id), model = FALSE)
-
-# m6a: Nonlinear test on the key HEC distance variable via pspline
+## AIC/BIC model testing - KAZA, both seasons
 library(survival)
-m6a_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ pspline(core_dist) + water_dist + forest_dist + crop_dist +
-    built_dist + fence_dist + river_dist + road_dist + elevation +
-    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
 
-# M6b: nonlinearity test on crop_dist
-m6b_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + pspline(crop_dist) +
-    built_dist + fence_dist + river_dist + road_dist + elevation +
-    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
-
-compare_ssf_models <- function(...) {
-  models <- list(...)
+fit_kaza_candidates <- function(data, season_label) {
+  
+  # restrict to rows with no NAs in ANY covariate used across the whole candidate set
+  complete_data <- data |> 
+    drop_na(core_dist, water_dist, forest_dist, crop_dist, built_dist,
+            fence_dist, river_dist, road_dist, elevation, slope, aspect,
+            evi, world_pop)
+  
+  # m1: full model
+  m1 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + elevation + slope + aspect +
+      evi + world_pop + strata(step_id), model = FALSE)
+  
+  # m2: natural/landscape-only (drop human-pressure variables)
+  m2 <- complete_data |> fit_ssf(case ~ 
+      water_dist + forest_dist + elevation + slope + aspect +
+      evi + strata(step_id), model = FALSE)
+  
+  # m3: human-conflict-focused
+  m3 <- complete_data |> fit_ssf(case ~ 
+      core_dist + crop_dist + built_dist + road_dist + fence_dist +
+      world_pop + strata(step_id), model = FALSE)
+  
+  # m4: full minus elevation (collinearity check)
+  m4 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + slope + aspect +
+      evi + world_pop + strata(step_id), model = FALSE)
+  
+  # m5: full minus EVI/world_pop -- static-only (no time-varying covariates)
+  m5 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + elevation + slope + aspect +
+      strata(step_id), model = FALSE)
+  
+  
+  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5)
+  
   tibble(
-    model = names(models),
-    AIC   = map_dbl(models, ~ AIC(.x$model)),
-    BIC   = map_dbl(models, ~ BIC(.x$model))
-  ) |>
-    mutate(delta_AIC = AIC - min(AIC)) |>
-    arrange(AIC)
+    season = season_label,
+    model  = names(models),
+    n_obs  = map_dbl(models, ~ .x$model$n),
+    AIC    = map_dbl(models, ~ AIC(.x$model)),
+    BIC    = map_dbl(models, ~ BIC(.x$model))
+  ) |> 
+    mutate(delta_AIC = AIC - min(AIC),
+           delta_BIC = BIC - min(BIC))
 }
 
-compare_ssf_models(M1 = m1_wet, M2 = m2_wet, M3 = m3_wet,
-                    M4 = m4_wet, M5 = m5_wet, M6a = m6a_wet, M6b = m6b_wet)
+kaza_candidates_wet <- fit_kaza_candidates(ele_trk_extract_wet, "KAZA Wet")
+kaza_candidates_dry <- fit_kaza_candidates(ele_trk_extract_dry, "KAZA Dry")
+
+bind_rows(kaza_candidates_wet, kaza_candidates_dry)
 ```
