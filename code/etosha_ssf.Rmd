@@ -100,7 +100,7 @@ resample_trk <- function(trk) {
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
-      track_resample(rate = hours(6), tolerance = minutes(15)) |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
       steps_by_burst()
   })) |>
   # select id and steps column
@@ -410,21 +410,6 @@ ele_trk_extract_etosha <- ele_etosha_reg |>
 
 
 ```{r}
-# clean names and add columns for log step length and cos turning angle
-
-# ele_trk_extract_etosha <- ele_trk_extract_etosha |> 
-#   clean_names() |> 
-#   mutate(
-#     log_sl = log(sl),
-#     cos_ta = cos(ta)
-#   )
-# ele_trk_extract_west <- ele_trk_extract_west |> 
-#   clean_names() |> 
-#   mutate(
-#     log_sl = log(sl),
-#     cos_ta = cos(ta)
-#   )
-
 # update to make step_id unique to each elephant before fitting
 ele_trk_extract_etosha <- ele_trk_extract_etosha |>
   mutate(step_id_ = paste(id, step_id_, sep = "_"))
@@ -579,8 +564,13 @@ saveRDS(m0_wet, here("outputs/m0_wet.rds"))
 saveRDS(m0_dry, here("outputs/m0_dry.rds"))
 saveRDS(ele_trk_extract_wet, here("outputs/ele_trk_extract_wet.rds"))
 saveRDS(ele_trk_extract_dry, here("outputs/ele_trk_extract_dry.rds"))
-# save raster stacks
-saveRDS(raster_stack_wet, here("outputs/raster_stack_wet.rds"))
-saveRDS(raster_stack_dry, here("outputs/raster_stack_dry.rds"))
+# save functions
+saveRDS(random_steps_by_id, here("outputs/random_steps_by_id.rds"))
+saveRDS(resample_trk, here("outputs/resample_trk.rds"))
+saveRDS(extract_evi, here("outputs/extract_evi.rds"))
+saveRDS(extract_lc_dist, here("outputs/extract_lc_dist.rds"))
+saveRDS(extract_linear, here("outputs/extract_linear.rds"))
+saveRDS(extract_static, here("outputs/extract_static.rds"))
+saveRDS(extract_world_pop, here("outputs/extract_world_pop.rds"))
 ```
 
