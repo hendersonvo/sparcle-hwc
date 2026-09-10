@@ -7,3 +7,4 @@
 outputs/
 data/batch_output_full_pipeline/
 data/batch_output_linear/
+data/batch_output_*/

@@ -100,7 +100,7 @@ resample_trk <- function(trk) {
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
-      track_resample(rate = hours(1), tolerance = minutes(15)) |>
+      track_resample(rate = hours(6), tolerance = minutes(15)) |>
       steps_by_burst()
   })) |>
   # select id and steps column
@@ -397,11 +397,11 @@ extract_linear <- function(ele_trk){
 
 ```{r}
 #test code
-test_slice <- head(ele_etosha_reg, n = 10) |> 
-  # extract_evi() |> 
-  # extract_world_pop() |> 
-  # extract_static() |> 
-  # extract_lc_dist() |> 
+test_slice <- head(ele_etosha_reg, n = 10000) |> 
+  extract_evi() |> 
+  extract_world_pop() |> 
+  extract_static() |> 
+  extract_lc_dist() |> 
   extract_linear()
   
 # this works!
@@ -410,17 +410,18 @@ test_slice <- head(ele_etosha_reg, n = 10) |>
 ```{r}
 #ele_trk_extract_etosha <- ele_etosha_reg |> 
  # extract_evi() |> 
-#  extract_world_pop() |> 
-#  extract_static() |> 
+ # extract_world_pop() |> 
+ # extract_static() |> 
  # extract_lc_dist() |> 
-#  extract_linear()
+ # extract_linear()
 
+#nrow(ele_trk_extract_etosha)  # should be ~565,200
 
 batch_size <- 50000
 n_total <- nrow(ele_etosha_reg)
 n_batches <- ceiling(n_total / batch_size)
 
-pipeline_dir <- here("data", "batch_output_full_pipeline")
+pipeline_dir <- here("data", paste0("batch_output_etosha_hr6_", nrow(ele_etosha_reg)))
 dir.create(pipeline_dir, showWarnings = FALSE)
 
 failed_batches <- c()
@@ -459,7 +460,65 @@ for (i in seq_len(n_batches)) {
 }
 
 cat("\nFailed batches:", paste(failed_batches, collapse = ", "), "\n")
+
+pipeline_files <- list.files(pipeline_dir, pattern = "pipeline_batch_.*\\.rds", full.names = TRUE)
+ele_trk_extract_etosha <- map_dfr(pipeline_files, readRDS)
+
+nrow(ele_trk_extract_etosha)  # should equal nrow(ele_etosha_reg), i.e. ~1,112,144 at hours(6)
 ```
+```{r}
+# Batched extraction for West 
+
+batch_size <- 50000
+n_total_west <- nrow(ele_west_reg)
+n_batches_west <- ceiling(n_total_west / batch_size)
+
+pipeline_dir_west <- here("data", paste0("batch_output_west_hr6_", n_total_west))
+dir.create(pipeline_dir_west, showWarnings = FALSE)
+
+failed_batches_west <- c()
+
+for (i in seq_len(n_batches_west)) {
+  out_path <- file.path(pipeline_dir_west, paste0("pipeline_batch_", sprintf("%04d", i), ".rds"))
+  if (file.exists(out_path)) {
+    cat("Batch", i, "of", n_batches_west, "already exists, skipping.\n")
+    next
+  }
+  
+  start_row <- (i - 1) * batch_size + 1
+  end_row <- min(i * batch_size, n_total_west)
+  batch <- ele_west_reg[start_row:end_row, ]
+  
+  result <- tryCatch({
+    batch |> 
+      extract_evi() |> 
+      extract_world_pop() |> 
+      extract_static() |> 
+      extract_lc_dist() |> 
+      extract_linear()
+  }, error = function(e) {
+    cat("BATCH", i, "FAILED (rows", start_row, "-", end_row, "):", conditionMessage(e), "\n")
+    failed_batches_west <<- c(failed_batches_west, i)
+    NULL
+  })
+  
+  if (!is.null(result)) {
+    saveRDS(result, out_path)
+    cat("Batch", i, "of", n_batches_west, "done (rows", start_row, "-", end_row, ")\n")
+  }
+  
+  rm(batch, result)
+  gc()
+}
+
+cat("\nFailed batches:", paste(failed_batches_west, collapse = ", "), "\n")
+
+pipeline_files_west <- list.files(pipeline_dir_west, pattern = "pipeline_batch_.*\\.rds", full.names = TRUE)
+ele_trk_extract_west <- map_dfr(pipeline_files_west, readRDS)
+
+nrow(ele_trk_extract_west)  # should equal n_total_west (3,690,049)
+```
+
 
 
 ```{r}
@@ -501,7 +560,7 @@ ele_trk_extract_west_dry <- ele_trk_extract_west |>
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-# etosha model
+# etosha batch extraction 
 m0_etosha_wet <- ele_trk_extract_etosha_wet |> fit_clogit(case_ ~ 
                                             core_dist + fence_dist + road_dist + water_rivers_dist +
                                             cropland_dist + grassland_dist + shrubland_dist + 
@@ -521,17 +580,21 @@ m0_etosha_dry <- ele_trk_extract_etosha_dry |> fit_clogit(case_ ~
 summary(m0_etosha_dry)
 
 # western populations model
-m0_west_wet <- ele_trk_extract_west_wet |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_west_wet <- ele_trk_extract_west_wet |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist +
+                                            water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id_),
                                           model = FALSE)
 summary(m0_west_wet)
 
-m0_west_dry <- ele_trk_extract_west_dry |> fit_clogit(case ~ 
-                                            core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
+m0_west_dry <- ele_trk_extract_west_dry |> fit_clogit(case_ ~ 
+                                            core_dist + fence_dist + road_dist +
+                                            water_rivers_dist +
+                                            cropland_dist + grassland_dist + shrubland_dist + 
+                                            urban_dist + tree_cover_dist +
                                             elevation + slope + aspect + 
                                             evi + world_pop + strata(step_id_),
                                           model = FALSE)
@@ -579,19 +642,8 @@ fit_etosha_candidates <- function(data, season_label) {
       cropland_dist + urban_dist + fence_dist + road_dist + 
       elevation + slope + aspect + strata(step_id_), model = FALSE)
   
-  # m6a: nonlinear test on the key HEC distance variable via pspline
-  m6a <- complete_data |> fit_clogit(case_ ~ 
-      pspline(core_dist) + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
-      cropland_dist + urban_dist + fence_dist + road_dist + 
-      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
   
-  # m6b: nonlinearity test on cropland_dist
-  m6b <- complete_data |> fit_clogit(case_ ~ 
-      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
-      pspline(cropland_dist) + urban_dist + fence_dist + road_dist + 
-      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
-  
-  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5, m6a = m6a, m6b = m6b)
+  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5)
   
   tibble(
     season = season_label,
@@ -610,13 +662,67 @@ etosha_candidates_dry <- fit_etosha_candidates(ele_trk_extract_etosha_dry, "Etos
 bind_rows(etosha_candidates_wet, etosha_candidates_dry)
 ```
 
+```{r}
+## AIC/BIC model testing - West, both seasons
+
+fit_west_candidates <- function(data, season_label) {
+  
+  complete_data <- data |> 
+    drop_na(core_dist, water_rivers_dist, tree_cover_dist, grassland_dist, shrubland_dist,
+            cropland_dist, urban_dist, fence_dist, road_dist,
+            elevation, slope, aspect, evi, world_pop)
+  
+  m1 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  m2 <- complete_data |> fit_clogit(case_ ~ 
+      water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      elevation + slope + aspect + evi + strata(step_id_), model = FALSE)
+  
+  m3 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + cropland_dist + urban_dist + road_dist + fence_dist +
+      world_pop + strata(step_id_), model = FALSE)
+  
+  m4 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      slope + aspect + evi + world_pop + strata(step_id_), model = FALSE)
+  
+  m5 <- complete_data |> fit_clogit(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + strata(step_id_), model = FALSE)
+  
+  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5)
+  
+  tibble(
+    season = season_label,
+    model  = names(models),
+    n_obs  = map_dbl(models, ~ .x$model$n),
+    AIC    = map_dbl(models, ~ AIC(.x$model)),
+    BIC    = map_dbl(models, ~ BIC(.x$model))
+  ) |> 
+    mutate(delta_AIC = AIC - min(AIC),
+           delta_BIC = BIC - min(BIC))
+}
+
+west_candidates_wet <- fit_west_candidates(ele_trk_extract_west_wet, "West Wet")
+west_candidates_dry <- fit_west_candidates(ele_trk_extract_west_dry, "West Dry")
+
+bind_rows(west_candidates_wet, west_candidates_dry)
+```
+
 
 ```{r}
 #save model outputs
-saveRDS(m0_wet, here("outputs/m0_wet.rds"))
-saveRDS(m0_dry, here("outputs/m0_dry.rds"))
-saveRDS(ele_trk_extract_wet, here("outputs/ele_trk_extract_wet.rds"))
-saveRDS(ele_trk_extract_dry, here("outputs/ele_trk_extract_dry.rds"))
+saveRDS(m0_etosha_wet, here("outputs/m0_etosha_wet.rds"))
+saveRDS(m0_etosha_dry, here("outputs/m0_etosha_dry.rds"))
+saveRDS(m0_west_wet, here("outputs/m0_west_wet.rds"))
+saveRDS(m0_west_dry, here("outputs/m0_west_dry.rds"))
+saveRDS(ele_trk_extract_etosha, here("outputs/ele_trk_extract_etosha.rds"))
+saveRDS(ele_trk_extract_west, here("outputs/ele_trk_extract_west.rds"))
 # save functions
 saveRDS(random_steps_by_id, here("outputs/random_steps_by_id.rds"))
 saveRDS(resample_trk, here("outputs/resample_trk.rds"))
@@ -625,5 +731,7 @@ saveRDS(extract_lc_dist, here("outputs/extract_lc_dist.rds"))
 saveRDS(extract_linear, here("outputs/extract_linear.rds"))
 saveRDS(extract_static, here("outputs/extract_static.rds"))
 saveRDS(extract_world_pop, here("outputs/extract_world_pop.rds"))
+#save batch outputs
+saveRDS(ele_trk_extract_etosha, here("outputs", "ele_trk_extract_etosha.rds"))
 ```
 
