@@ -89,6 +89,24 @@ build_static_stack <- function() {
  
   terrain_r <- rast(file.path(gee_folder, "terrain_rast_500m.tif"))
   terrain_r <- project(terrain_r, template, method = "bilinear")
+  
+  c(r_stack, terrain_r)
+}
+
+#Linear feature stack 
+build_linear_stack <- function() {
+ 
+  linear_types <- c("hydrorivers", "kaza_vet_fences", "roads")
+  linear_folder <- here("data", "Linear_features")
+ 
+  r_list <- map(linear_types, function(feature) {
+    fp <- file.path(linear_folder, paste0(feature, "_linear_500m.tif"))
+    project(rast(fp), template, method = "near")
+  })
+  r_stack <- rast(r_list)
+  names(r_stack) <- paste0(linear_types, "_linear")
+ 
+  r_stack
 }
 
 # 3. Build land-cover distance stack, average across year 
@@ -173,19 +191,100 @@ build_world_pop_mean <- function(years = years_range) {
  
 build_covariate_stack <- function(season) {
   static_stack  <- build_static_stack()
+  linear_stack  <- build_linear_stack()
   lc_stack      <- build_lc_dist_mean()
   evi_stack     <- build_evi_mean(season)
   pop_stack     <- build_world_pop_mean()
  
-  full_stack <- c(static_stack, lc_stack, evi_stack, pop_stack)
+ full_stack <- c(static_stack, linear_stack, lc_stack, evi_stack, pop_stack)
   full_stack
 }
 
-# 7. Predict linear predictor / RSS from model coefficients
+# 7. Predict linear predictor / SSF from model coefficients
 # -----------------------------------------------------------
+
+predict_ssf_surface <- function(model, covariate_stack) {
+ 
+  betas <- coef(model)
+ 
+  missing_in_stack <- setdiff(names(betas), names(covariate_stack))
+  if (length(missing_in_stack) > 0) {
+    warning("Covariates in model but missing from raster stack: ",
+            paste(missing_in_stack, collapse = ", "),
+            " -- these terms will be dropped from the prediction.")
+  }
+ 
+  common_names <- intersect(names(betas), names(covariate_stack))
+  stack_sub <- covariate_stack[[common_names]]
+  betas_sub <- betas[common_names]
+ 
+  #multiply each layer by its coefficient, then sum across layers
+  weighted <- stack_sub * betas_sub
+  lp <- sum(weighted, na.rm = TRUE)   #linear predictor surface
+  names(lp) <- "linear_predictor"
+  lp
+  
+}
+
+# 8. Linear predictor to resistance surface
+# ------------------------------------------------------------
+
+lp_to_resistance <- function(lp, min_resistance = 1, max_resistance = 100) {
+ 
+  w <- exp(lp)  #calculates relative selection strength (w)
+ 
+  #normalize selection strength between 0 and 1 
+  w_min <- global(w, "min", na.rm = TRUE)[1, 1]
+  w_max <- global(w, "max", na.rm = TRUE)[1, 1]
+  w_norm <- (w - w_min) / (w_max - w_min)
+ 
+  #Method 1: invert high selection strength to low resistance which assumes linear mapping between selection preference (w) and landscape resistance
+ # resistance <- min_resistance + (max_resistance - min_resistance) * (1 - w_norm)
+ # names(resistance) <- "resistance"
+  #resistance
+  
+  # or Method 2:  Non-linear Exponential Resistance Transformation
+  # R = 1 + (max_res - min_res) * exp(-c * w_norm)
+  #As w_norm approaches 1 (high selection), resistance approaches min_resistance 
+  #As w_norm appraoches 0 (lower selection), resistance rises rapidly toward max-resistance 
+  res_raw <- exp(-shape_parameter * w_norm) # shape_parameter keeps curve flatter closer to 0.1 and steeply penalizes non-selected habitats 
+  #Rescale the transformed surace to target [min_resistance, max_resistance]
+  r_min <- global(res_raw, "min", na.rm = TRUE)[1, 1]
+  r_max <- global(res_raw, "max", na.rm = TRUE)[1, 1]
+  resistance <- min_resistance + (max_resistance - min_resistance) * ((res_raw - r_min) / (r_max - r_min))
+  names(resistance) <- "resistance"
+  
+  return(resistance)
+ 
+}
+
+#9. Run 
+# ------------------------------------------------------------
+run_resistance_pipeline <- function(model, season, pop_label) {
+  message ("Building covariate stack for ", pop_label, "-", season,)
+  cov_stack <- build_covariate_stack(season)
+  
+  message ("Predicting linear predictor surface")
+  lp <- predict_ssf_surface(model, cov_stack)
+  
+ message("Converting to resistance surface") 
+  resistance <- lp_to_resistance(lp)
+  
+  out_path <- file.path(out_folder, paste0("resistance_", pop_label, "_", season, ".tif"))
+  writeRaster(resistance, out_path, overwrite = TRUE)
+  message("saved", out_path)
+}
 
 
 ```
 
+```{r}
+#Since the names of raster layers and coefficients must match for predict_ssf_surface()
+# Check model coefficient names
+names(coef(m0_etosha_dry))
+
+# Check raster stack layer names:
+names(cov_stack)
+```
 
 
