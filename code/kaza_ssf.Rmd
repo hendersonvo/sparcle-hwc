@@ -68,8 +68,8 @@ ele_trk_wet <- make_track(ele_wet,
 ```
 
 ```{r}
-summarize_sampling_rate(ele_trk_dry, time_unit = "sec") # sampling rate should be ?
-summarize_sampling_rate(ele_trk_wet, time_unit = "sec")
+summarize_sampling_rate(ele_trk_dry, time_unit = "min") # sampling rate should be ?
+summarize_sampling_rate(ele_trk_wet, time_unit = "min")
 ```
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -106,8 +106,8 @@ random_steps_by_id <- function(reg_trk) {
 # Set seed before generating any random steps
 set.seed(123)
 # Resample based on elephant ID 
-ele_dry_reg <- resample_trk(ele_trk_dry) |> random_steps_by_id()
-ele_wet_reg <- resample_trk(ele_trk_wet) |> random_steps_by_id()
+ele_dry_reg <- resample_trk(ele_trk_dry) |> filter(!is.na(sl_), sl_ > 0) |> random_steps_by_id()
+ele_wet_reg <- resample_trk(ele_trk_wet) |> filter(!is.na(sl_), sl_ > 0) |> random_steps_by_id()
 
 ```
 
@@ -116,227 +116,195 @@ ele_wet_reg <- resample_trk(ele_trk_wet) |> random_steps_by_id()
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-file_paths <- c()
-
-gee_folder <- here("data", "500m_data")
-
-# create a vector of file paths to each raster
-# EVI and world population added manually later for each coresponding season/year
-
-for (file in list.files(gee_folder)[!list.files(gee_folder) %in% c("EVI data", "gpw_rast_500m.tif", "worldPop_comb_img_500m.tif")]) {
-  file_paths <- c(file_paths, paste0(gee_folder,"/", file))
-}
+# file_paths <- c()
+# 
+# gee_folder <- here("data", "500m_data")
+# 
+# # create a vector of file paths to each raster
+# # EVI and world population added manually later for each coresponding season/year
+# 
+# for (file in list.files(gee_folder)[!list.files(gee_folder) %in% c("EVI data", "gpw_rast_500m.tif", "worldPop_comb_img_500m.tif")]) {
+#   file_paths <- c(file_paths, paste0(gee_folder,"/", file))
+# }
 
 ```
 
 ```{r}
-# set up for raster stack
-
-crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
-test_crop <- ext(12.5, 25.5, -21.5, -16.5)
-target_res <- 0.0045 # 500m resolution
-
-template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
-
-raster_list <- c()
-
-# create raster stack
-raster_list <- map(file_paths, function(fp) {
-  r <- rast(fp)                                                                 # turn file path into raster
-  project(r, template, method = "bilinear")                                     # project
-})
-
-raster_stack <- rast(raster_list)                                               # create stack from list
-
-which(names(raster_stack) == "distance")
-names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
+# # set up for raster stack
+# 
+# crop_extent <- ext(18.461667,  25.283338, -20.916664, -17.133330)
+# test_crop <- ext(12.5, 25.5, -21.5, -16.5)
+# target_res <- 0.0045 # 500m resolution
+# 
+# template <- rast(test_crop, resolution = target_res, crs = "EPSG:4326")
+# 
+# raster_list <- c()
+# 
+# # create raster stack
+# raster_list <- map(file_paths, function(fp) {
+#   r <- rast(fp)                                                                 # turn file path into raster
+#   project(r, template, method = "bilinear")                                     # project
+# })
+# 
+# raster_stack <- rast(raster_list)                                               # create stack from list
+# 
+# which(names(raster_stack) == "distance")
+# names(raster_stack)[c(1, 6, 7, 8)] <- c("core_dist", "fence_dist", "river_dist", "road_dist")
 
 ```
+
+```{r}
+# loading predefined functions
+
+extract_evi <- readRDS(here("outputs", "extract_evi.rds"))
+extract_lc_dist <- readRDS(here("outputs", "extract_lc_dist.rds"))
+extract_linear <- readRDS(here("outputs", "extract_linear.rds"))
+extract_static <- readRDS(here("outputs", "extract_static.rds"))
+extract_world_pop <- readRDS(here("outputs", "extract_world_pop.rds"))
+```
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Step 4: Extracting covariates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-```{r}
-# Preliminary step: extract covariates to points
-
-ele_trk_extract_dry <- ele_dry_reg |> 
-  extract_covariates(raster_stack)
-
-ele_trk_extract_wet <- ele_wet_reg |> 
-  extract_covariates(raster_stack)
-
-```
 
 ```{r}
 # EVI extraction loop
 
-evi_folder <- here("data", "500m_data", "EVI data")
-wet_months <- c(1:4, 11:12)
-dry_months <- c(5:10)
-
-# extract_etosha_evi <- data_frame()
-#
-# for (yr in 2008:2020) {
-#   for (szn in c("dry", "wet")) {
-#     # for each iteration, filter for a year and season
-#     evi_extract <- extract_etosha_clean |> 
-#       filter(year == yr,
-#              season == szn)
-#     # if no rows exist, move on
-#     if (nrow(evi_extract) == 0){next}
-#     
-#     # if season is dry, use the dry season evi
-#     if (szn == "dry"){
-#       r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
-#       evi_extract <- evi_extract |> 
-#         extract_covariates(r)
-#       
-#     # if season is wet, use evi rasters from tail ends of the year
-#     } else{
-#       r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
-#       r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
-#       sub1 <- evi_extract |> 
-#         filter(month(t2_) %in% 1:4) |> 
-#         extract_covariates(r1)
-#       sub2 <- evi_extract |> 
-#         filter(month(t2_) %in% 11:12) |> 
-#         extract_covariates(r2)
-#       evi_extract <- bind_rows(sub1, sub2)
-#     }
-#     
-#     # bind newly extracted rows to new dataframe
-#     extract_etosha_evi <- bind_rows(extract_etosha_evi, evi_extract)
+# evi_folder <- here("data", "500m_data", "EVI data")
+# wet_months <- c(1:4, 11:12)
+# dry_months <- c(5:10)
+# 
+# extract_evi <- function(ele_trk) {
+#   
+#   if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
+#     return(ele_trk)
 #   }
+#   
+#   ele_trk_mutated <- ele_trk
+#   
+#   # create yearly and seasonal data if needed  
+#   if(!"year" %in% colnames(ele_trk)){
+#     ele_trk_mutated <- ele_trk_mutated |>
+#       mutate(year = year(t2_))
+#   }
+#   if(!"season" %in% colnames(ele_trk)){
+#     ele_trk_mutated <- ele_trk_mutated |> 
+#       mutate(season = case_when(
+#            month(t2_) %in% wet_months ~ "wet",
+#            month(t2_) %in% dry_months ~ "dry"))
+#   }
+#   
+#   # initialize output
+#   new_dataframe <- tibble()
+#   
+#   for (yr in 2008:2020) {
+#     for (szn in c("dry", "wet")) {
+#       # for each iteration, filter for a year and season
+#       evi_extract <- ele_trk_mutated |> 
+#         filter(year == yr,
+#                season == szn)
+#       # if no rows exist, move on
+#       if (nrow(evi_extract) == 0){next}
+#       
+#       # if season is dry, use the dry season evi
+#       if (szn == "dry"){
+#         r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
+#         evi_extract <- evi_extract |> 
+#           extract_covariates(r)
+#         
+#       # if season is wet, use evi rasters from tail ends of the year
+#       } else{
+#         r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
+#         r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
+#         sub1 <- evi_extract |> 
+#           filter(month(t2_) %in% 1:4) |> 
+#           extract_covariates(r1)
+#         sub2 <- evi_extract |> 
+#           filter(month(t2_) %in% 11:12) |> 
+#           extract_covariates(r2)
+#         evi_extract <- bind_rows(sub1, sub2)
+#       }
+#       
+#       # bind newly extracted rows to new dataframe
+#       new_dataframe <- bind_rows(new_dataframe, evi_extract)
+#     }
+#   }
+#   class(new_dataframe) <- class(ele_trk)
+#   return(new_dataframe)
 # }
-
-extract_evi <- function(ele_trk) {
-  
-  if("EVI" %in% colnames(ele_trk) | "evi" %in% colnames(ele_trk)){
-    return(ele_trk)
-  }
-  
-  ele_trk_mutated <- ele_trk
-  
-  # create yearly and seasonal data if needed  
-  if(!"year" %in% colnames(ele_trk)){
-    ele_trk_mutated <- ele_trk_mutated |>
-      mutate(year = year(t2_))
-  }
-  if(!"season" %in% colnames(ele_trk)){
-    ele_trk_mutated <- ele_trk_mutated |> 
-      mutate(season = case_when(
-           month(t2_) %in% wet_months ~ "wet",
-           month(t2_) %in% dry_months ~ "dry"))
-  }
-  
-  # initialize output
-  new_dataframe <- tibble()
-  
-  for (yr in 2008:2020) {
-    for (szn in c("dry", "wet")) {
-      # for each iteration, filter for a year and season
-      evi_extract <- ele_trk_mutated |> 
-        filter(year == yr,
-               season == szn)
-      # if no rows exist, move on
-      if (nrow(evi_extract) == 0){next}
-      
-      # if season is dry, use the dry season evi
-      if (szn == "dry"){
-        r <- rast(paste0(evi_folder, "/", "evi_dry_", yr, ".tif"))
-        evi_extract <- evi_extract |> 
-          extract_covariates(r)
-        
-      # if season is wet, use evi rasters from tail ends of the year
-      } else{
-        r1 <- rast(paste0(evi_folder, "/", "evi_wet_", yr - 1,"_", yr, ".tif"))
-        r2 <- rast(paste0(evi_folder, "/", "evi_wet_", yr,"_", yr + 1, ".tif"))
-        sub1 <- evi_extract |> 
-          filter(month(t2_) %in% 1:4) |> 
-          extract_covariates(r1)
-        sub2 <- evi_extract |> 
-          filter(month(t2_) %in% 11:12) |> 
-          extract_covariates(r2)
-        evi_extract <- bind_rows(sub1, sub2)
-      }
-      
-      # bind newly extracted rows to new dataframe
-      new_dataframe <- bind_rows(new_dataframe, evi_extract)
-    }
-  }
-  class(new_dataframe) <- class(ele_trk)
-  return(new_dataframe)
-}
-
-# extract evi to base extractions
-ele_trk_extract_dry <- extract_evi(ele_trk_extract_dry)
-ele_trk_extract_wet <- extract_evi(ele_trk_extract_wet)
+# 
+# # extract evi to base extractions
+# ele_trk_extract_dry <- extract_evi(ele_trk_extract_dry)
+# ele_trk_extract_wet <- extract_evi(ele_trk_extract_wet)
 ```
 
 ```{r}
 # World population extraction loop
 
-world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
-world_pop_list <- split(world_pop, 1:nlyr(world_pop))
-
-extract_world_pop <- function(ele_trk){
-  
-  ele_trk_mutated <- ele_trk
-  
-  if(!"year" %in% colnames(ele_trk)){
-    ele_trk_mutated <- ele_trk_mutated |>
-      mutate(year = year(t2_))
-  }  
-  
-  # initialize output
-  new_dataframe <- tibble()
-  
-  for(yr in 2008:2020){
-    pop_extract <- ele_trk_mutated |> 
-      filter(year == yr)
-    
-    if(nrow(pop_extract) == 0){next}
-    
-    list_pos <- yr - 1999
-    
-    r <- world_pop_list[[list_pos]]
-    
-    class(pop_extract) <- class(ele_trk)  # restore track_xyt class
-    
-    pop_extract <- pop_extract |> 
-      extract_covariates(r) |> 
-      rename(world_pop = as.character(yr))
-    
-    new_dataframe <- bind_rows(new_dataframe, pop_extract)
-  }
-  class(new_dataframe) <- class(ele_trk)
-  return(new_dataframe)
-}
-
-# dry/wet split
-ele_trk_extract_dry <- extract_world_pop(ele_trk_extract_dry)
-ele_trk_extract_wet <- extract_world_pop(ele_trk_extract_wet)
+# world_pop <- rast(here("data", "500m_data", "worldPop_comb_img_500m.tif"))
+# world_pop_list <- split(world_pop, 1:nlyr(world_pop))
+# 
+# extract_world_pop <- function(ele_trk){
+#   
+#   ele_trk_mutated <- ele_trk
+#   
+#   if(!"year" %in% colnames(ele_trk)){
+#     ele_trk_mutated <- ele_trk_mutated |>
+#       mutate(year = year(t2_))
+#   }  
+#   
+#   # initialize output
+#   new_dataframe <- tibble()
+#   
+#   for(yr in 2008:2020){
+#     pop_extract <- ele_trk_mutated |> 
+#       filter(year == yr)
+#     
+#     if(nrow(pop_extract) == 0){next}
+#     
+#     list_pos <- yr - 1999
+#     
+#     r <- world_pop_list[[list_pos]]
+#     
+#     class(pop_extract) <- class(ele_trk)  # restore track_xyt class
+#     
+#     pop_extract <- pop_extract |> 
+#       extract_covariates(r) |> 
+#       rename(world_pop = as.character(yr))
+#     
+#     new_dataframe <- bind_rows(new_dataframe, pop_extract)
+#   }
+#   class(new_dataframe) <- class(ele_trk)
+#   return(new_dataframe)
+# }
+# 
+# # dry/wet split
+# ele_trk_extract_dry <- extract_world_pop(ele_trk_extract_dry)
+# ele_trk_extract_wet <- extract_world_pop(ele_trk_extract_wet)
 ```
 
 
 
 ```{r}
-# clean names and add columns for log step length and cos turning angle
+# create step id and extract all covariates
 
-ele_trk_extract_dry <- ele_trk_extract_dry |> 
-  clean_names() |> 
-  mutate(
-    log_sl = log(sl),
-    cos_ta = cos(ta),
-    step_id = paste(id, step_id, sep = "_")
-  )
+ele_trk_extract_dry <- ele_dry_reg |> 
+  mutate(step_id = paste(id, step_id_, sep = "_")) |> 
+  extract_evi() |>
+  extract_world_pop() |>
+  extract_static() |>
+  extract_lc_dist() |>
+  extract_linear()
 
-ele_trk_extract_wet <- ele_trk_extract_wet |> 
-  clean_names() |> 
-  mutate(
-    log_sl = log(sl),
-    cos_ta = cos(ta),
-    step_id = paste(id, step_id, sep = "_")
-  )
+ele_trk_extract_wet <- ele_wet_reg
+  mutate(step_id = paste(id, step_id_, sep = "_")) |> 
+  extract_evi() |>
+  extract_world_pop() |>
+  extract_static() |>
+  extract_lc_dist() |>
+  extract_linear()
+  
+  
 # update to make step_id unique to each elephant before fitting
 #ele_trk_extract_east <- ele_trk_extract_etosha |>
 #  mutate(step_id = paste(id, step_id, sep = "_"))
@@ -426,60 +394,61 @@ compare_ssf_models(M1 = m1_dry, M2 = m2_dry, M3 = m3_dry,
                     M4 = m4_dry, M5 = m5_dry, M6 = m6_dry)
 ```
 ```{r}
-# AIC model testing for wet season
-
-# m1: Full model
-m1_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m2: Natural/landscape-only (drop human-pressure variables)
-m2_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ water_dist + forest_dist + elevation + slope + aspect +
-    evi + strata(step_id), model = FALSE)
-
-# m3: Human-conflict-focused 
-m3_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + crop_dist + built_dist + road_dist + fence_dist +
-    world_pop + strata(step_id), model = FALSE)
-
-# m4: Full minus terrain (drop elevation due to collinearity)
-m4_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + slope + aspect +
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m5: Full minus EVI/world_pop (static-only, no time-varying covariates)
-m5_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    strata(step_id), model = FALSE)
-
-# m6a: Nonlinear test on the key HEC distance variable via pspline
+## AIC/BIC model testing - KAZA, both seasons
 library(survival)
-m6a_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ pspline(core_dist) + water_dist + forest_dist + crop_dist +
-    built_dist + fence_dist + river_dist + road_dist + elevation +
-    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
 
-# M6b: nonlinearity test on crop_dist
-m6b_wet <- fit_ssf(ele_trk_extract_wet,
-  case ~ core_dist + water_dist + forest_dist + pspline(crop_dist) +
-    built_dist + fence_dist + river_dist + road_dist + elevation +
-    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
-
-compare_ssf_models <- function(...) {
-  models <- list(...)
+fit_kaza_candidates <- function(data, season_label) {
+  
+  # restrict to rows with no NAs in ANY covariate used across the whole candidate set
+  complete_data <- data |> 
+    drop_na(core_dist, water_dist, forest_dist, crop_dist, built_dist,
+            fence_dist, river_dist, road_dist, elevation, slope, aspect,
+            evi, world_pop)
+  
+  # m1: full model
+  m1 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + elevation + slope + aspect +
+      evi + world_pop + strata(step_id), model = FALSE)
+  
+  # m2: natural/landscape-only (drop human-pressure variables)
+  m2 <- complete_data |> fit_ssf(case ~ 
+      water_dist + forest_dist + elevation + slope + aspect +
+      evi + strata(step_id), model = FALSE)
+  
+  # m3: human-conflict-focused
+  m3 <- complete_data |> fit_ssf(case ~ 
+      core_dist + crop_dist + built_dist + road_dist + fence_dist +
+      world_pop + strata(step_id), model = FALSE)
+  
+  # m4: full minus elevation (collinearity check)
+  m4 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + slope + aspect +
+      evi + world_pop + strata(step_id), model = FALSE)
+  
+  # m5: full minus EVI/world_pop -- static-only (no time-varying covariates)
+  m5 <- complete_data |> fit_ssf(case ~ 
+      core_dist + water_dist + forest_dist + crop_dist + built_dist +
+      fence_dist + river_dist + road_dist + elevation + slope + aspect +
+      strata(step_id), model = FALSE)
+  
+  
+  models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5)
+  
   tibble(
-    model = names(models),
-    AIC   = map_dbl(models, ~ AIC(.x$model)),
-    BIC   = map_dbl(models, ~ BIC(.x$model))
-  ) |>
-    mutate(delta_AIC = AIC - min(AIC)) |>
-    arrange(AIC)
+    season = season_label,
+    model  = names(models),
+    n_obs  = map_dbl(models, ~ .x$model$n),
+    AIC    = map_dbl(models, ~ AIC(.x$model)),
+    BIC    = map_dbl(models, ~ BIC(.x$model))
+  ) |> 
+    mutate(delta_AIC = AIC - min(AIC),
+           delta_BIC = BIC - min(BIC))
 }
 
-compare_ssf_models(M1 = m1_wet, M2 = m2_wet, M3 = m3_wet,
-                    M4 = m4_wet, M5 = m5_wet, M6a = m6a_wet, M6b = m6b_wet)
+kaza_candidates_wet <- fit_kaza_candidates(ele_trk_extract_wet, "KAZA Wet")
+kaza_candidates_dry <- fit_kaza_candidates(ele_trk_extract_dry, "KAZA Dry")
+
+bind_rows(kaza_candidates_wet, kaza_candidates_dry)
 ```
