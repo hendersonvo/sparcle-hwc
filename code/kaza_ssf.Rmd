@@ -288,22 +288,25 @@ extract_world_pop <- readRDS(here("outputs", "extract_world_pop.rds"))
 ```{r}
 # create step id and extract all covariates
 
-ele_trk_extract_dry <- ele_dry_reg |> 
-  mutate(step_id = paste(id, step_id_, sep = "_")) |> 
-  extract_evi() |>
-  extract_world_pop() |>
-  extract_static() |>
-  extract_lc_dist() |>
-  extract_linear()
+#ele_trk_extract_dry <- ele_dry_reg |> 
+ # mutate(step_id = paste(id, step_id_, sep = "_")) |> 
+ # extract_evi() |>
+ # extract_world_pop() |>
+  #extract_static() |>
+#  extract_lc_dist() |>
+ # extract_linear()
 
-ele_trk_extract_wet <- ele_wet_reg
-  mutate(step_id = paste(id, step_id_, sep = "_")) |> 
-  extract_evi() |>
-  extract_world_pop() |>
-  extract_static() |>
-  extract_lc_dist() |>
-  extract_linear()
-  
+#ele_trk_extract_wet <- ele_wet_reg |>
+ # mutate(step_id = paste(id, step_id_, sep = "_")) |> 
+ # extract_evi() |>
+#  extract_world_pop() |>
+ # extract_static() |>
+ # extract_lc_dist() |>
+ # extract_linear()
+
+# pull saved extraction 
+ele_trk_extract_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
+ele_trk_extract_wet <- readRDS(here("outputs", "ele_trk_extract_kaza_wet.rds"))
   
 # update to make step_id unique to each elephant before fitting
 #ele_trk_extract_east <- ele_trk_extract_etosha |>
@@ -324,115 +327,57 @@ ele_trk_extract_wet <- ele_wet_reg
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-# kaza model dry
-m0_dry_east <- ele_trk_extract_dry |> fit_ssf(case ~ core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
-                                            elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
-                                          model = FALSE)
-summary(m0_dry_east)
+# kaza model
+m0_dry_kaza <- ele_trk_extract_dry |> fit_clogit(case_ ~ 
+    core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+    cropland_dist + urban_dist + fence_dist + road_dist + elevation + slope + aspect + 
+    evi + world_pop + strata(step_id), model = FALSE)
+summary(m0_dry_kaza)
 
-# kaza model wet
-m0_wet_east <- ele_trk_extract_wet |> fit_ssf(case ~ core_dist + water_dist + forest_dist + crop_dist + 
-                                            built_dist + fence_dist + river_dist + road_dist + 
-                                            elevation + slope + aspect + 
-                                            evi + world_pop + strata(step_id),
-                                          model = FALSE)
-summary(m0_wet_east)
+m0_wet_kaza <- ele_trk_extract_wet |> fit_clogit(case_ ~ 
+    core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+    cropland_dist + urban_dist + fence_dist + road_dist + elevation + slope + aspect + 
+    evi + world_pop + strata(step_id), model = FALSE)
+summary(m0_wet_kaza)
 
 ```
 ```{r}
-# AIC model testing for dry season
-
-# m1: Full model (current m0)
-m1_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m2: Natural/landscape-only (drop human-pressure variables)
-m2_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ water_dist + forest_dist + elevation + slope + aspect +
-    evi + strata(step_id), model = FALSE)
-
-# m3: Human-conflict-focused 
-m3_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ core_dist + crop_dist + built_dist + road_dist + fence_dist +
-    world_pop + strata(step_id), model = FALSE)
-
-# m4: Full minus terrain (drop slope/aspect if collinear with elevation)
-m4_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + + slope + aspect
-    evi + world_pop + strata(step_id), model = FALSE)
-
-# m5: Full minus EVI/world_pop (static-only, no time-varying covariates)
-m5_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ core_dist + water_dist + forest_dist + crop_dist + built_dist +
-    fence_dist + river_dist + road_dist + elevation + slope + aspect +
-    strata(step_id), model = FALSE)
-
-# 66: Nonlinear test on the key HEC distance variable via pspline
-library(survival)
-m6_dry <- fit_ssf(ele_trk_extract_dry,
-  case ~ pspline(core_dist) + water_dist + forest_dist + crop_dist +
-    built_dist + fence_dist + river_dist + road_dist + elevation +
-    slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
-
-compare_ssf_models <- function(...) {
-  models <- list(...)
-  tibble(
-    model = names(models),
-    AIC   = map_dbl(models, ~ AIC(.x$model)),
-    BIC   = map_dbl(models, ~ BIC(.x$model))
-  ) |>
-    mutate(delta_AIC = AIC - min(AIC)) |>
-    arrange(AIC)
-}
-
-compare_ssf_models(M1 = m1_dry, M2 = m2_dry, M3 = m3_dry,
-                    M4 = m4_dry, M5 = m5_dry, M6 = m6_dry)
-```
-```{r}
-## AIC/BIC model testing - KAZA, both seasons
-library(survival)
+#fit_kaza_candidates <- function(data, season_label) {
+  
+ library(survival)
 
 fit_kaza_candidates <- function(data, season_label) {
   
-  # restrict to rows with no NAs in ANY covariate used across the whole candidate set
-  complete_data <- data |> 
-    drop_na(core_dist, water_dist, forest_dist, crop_dist, built_dist,
-            fence_dist, river_dist, road_dist, elevation, slope, aspect,
-            evi, world_pop)
+    complete_data <- data |> 
+    drop_na(core_dist, water_rivers_dist, tree_cover_dist, grassland_dist, shrubland_dist,
+            cropland_dist, urban_dist, fence_dist, road_dist,
+            elevation, slope, aspect, evi, world_pop) |>
+    select(case_, step_id, core_dist, water_rivers_dist, tree_cover_dist, grassland_dist, 
+           shrubland_dist, cropland_dist, urban_dist, fence_dist, road_dist,
+           elevation, slope, aspect, evi, world_pop)
   
-  # m1: full model
-  m1 <- complete_data |> fit_ssf(case ~ 
-      core_dist + water_dist + forest_dist + crop_dist + built_dist +
-      fence_dist + river_dist + road_dist + elevation + slope + aspect +
-      evi + world_pop + strata(step_id), model = FALSE)
+  m1 <- complete_data |> fit_ssf(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
   
-  # m2: natural/landscape-only (drop human-pressure variables)
-  m2 <- complete_data |> fit_ssf(case ~ 
-      water_dist + forest_dist + elevation + slope + aspect +
-      evi + strata(step_id), model = FALSE)
+  m2 <- complete_data |> fit_ssf(case_ ~ 
+      water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      elevation + slope + aspect + evi + strata(step_id), model = FALSE)
   
-  # m3: human-conflict-focused
-  m3 <- complete_data |> fit_ssf(case ~ 
-      core_dist + crop_dist + built_dist + road_dist + fence_dist +
+  m3 <- complete_data |> fit_ssf(case_ ~ 
+      core_dist + cropland_dist + urban_dist + road_dist + fence_dist +
       world_pop + strata(step_id), model = FALSE)
   
-  # m4: full minus elevation (collinearity check)
-  m4 <- complete_data |> fit_ssf(case ~ 
-      core_dist + water_dist + forest_dist + crop_dist + built_dist +
-      fence_dist + river_dist + road_dist + slope + aspect +
-      evi + world_pop + strata(step_id), model = FALSE)
+  m4 <- complete_data |> fit_ssf(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      slope + aspect + evi + world_pop + strata(step_id), model = FALSE)
   
-  # m5: full minus EVI/world_pop -- static-only (no time-varying covariates)
-  m5 <- complete_data |> fit_ssf(case ~ 
-      core_dist + water_dist + forest_dist + crop_dist + built_dist +
-      fence_dist + river_dist + road_dist + elevation + slope + aspect +
-      strata(step_id), model = FALSE)
-  
+  m5 <- complete_data |> fit_ssf(case_ ~ 
+      core_dist + water_rivers_dist + tree_cover_dist + grassland_dist + shrubland_dist +
+      cropland_dist + urban_dist + fence_dist + road_dist + 
+      elevation + slope + aspect + strata(step_id), model = FALSE)
   
   models <- list(m1 = m1, m2 = m2, m3 = m3, m4 = m4, m5 = m5)
   
@@ -446,6 +391,7 @@ fit_kaza_candidates <- function(data, season_label) {
     mutate(delta_AIC = AIC - min(AIC),
            delta_BIC = BIC - min(BIC))
 }
+
 
 kaza_candidates_wet <- fit_kaza_candidates(ele_trk_extract_wet, "KAZA Wet")
 kaza_candidates_dry <- fit_kaza_candidates(ele_trk_extract_dry, "KAZA Dry")
