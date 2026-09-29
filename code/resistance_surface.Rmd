@@ -69,9 +69,11 @@ template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
 # 1. Load fitted SSF modles
 # ------------------------------------------------------------
- 
-m0_etosha_wet <- readRDS(file.path(model_folder, "m0_etosha_wet.rds"))
-m0_etosha_dry <- readRDS(file.path(model_folder, "m0_etosha_dry.rds"))
+m0_dry <- here("outputs", "m0_etosha_dry.rds")
+m0_wet <- here("outputs", "m0_etosha_wet.rds") 
+
+#m0_etosha_wet <- readRDS(file.path(model_folder, "m0_etosha_wet.rds"))
+#m0_etosha_dry <- readRDS(file.path(model_folder, "m0_etosha_dry.rds"))
 
 # 2. Build static covariate raster (seaonal)
 # ------------------------------------------------------------
