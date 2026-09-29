@@ -50,7 +50,7 @@ library(here)
 # 0. Configuring
 # ------------------------------------------------------------
 pop_label   <- "etosha"
-years_range <- 2008:2020
+target_year <- 2020 #non-static covariates using this single year 
  
 gee_folder      <- here("data", "500m_data")
 lc_dist_folder  <- here("data", "ESACCI_LCCS", "lc_dist_2")
@@ -111,92 +111,74 @@ build_linear_stack <- function() {
 
 # 3. Build land-cover distance stack, average across year 
 # ------------------------------------------------------------
-build_lc_dist_mean <- function(years = years_range) {
+build_lc_dist_year <- function(year = target_year) {
  
-  yearly_stacks <- map(years, function(yr) {
-    r_list <- map(lc_types, function(lc) {
-      fp <- file.path(lc_dist_folder, paste0("dist_", lc, "_", yr, ".tif"))
-      if (!file.exists(fp)) return(NULL)
-      project(rast(fp), template, method = "bilinear")
-    })
-    r_list <- compact(r_list) 
-    if (length(r_list) == 0) return(NULL)
-    r <- rast(r_list)
-    names(r) <- paste0(lc_types[seq_along(r_list)], "_dist")
-    r
-  })
-  yearly_stacks <- compact(yearly_stacks)
+  paths <- setNames(
+    file.path(lc_dist_folder, paste0("dist_", lc_types, "_", year, ".tif")),
+    lc_types
+  )
+  paths <- paths[file.exists(paths)]
  
-  #mean across years, per land-cover type
-  lc_mean <- rast(map(lc_types, function(lc) {
-    layer_name <- paste0(lc, "_dist")
-    layers_for_type <- rast(map(yearly_stacks, function(s) {
-      if (layer_name %in% names(s)) s[[layer_name]] else NULL
-    }) |> compact())
-    mean(layers_for_type, na.rm = TRUE)
-  }))
-  names(lc_mean) <- paste0(lc_types, "_dist")
-  lc_mean
+  missing_lc <- setdiff(lc_types, names(paths))
+  if (length(missing_lc) > 0) {
+    warning("Land-cover distance rasters missing for ", year, ": ",
+            paste(missing_lc, collapse = ", "))
+  }
+ 
+  r_list <- map(paths, ~ project(rast(.x), template, method = "bilinear"))
+  r_stack <- rast(r_list)
+  names(r_stack) <- paste0(names(paths), "_dist")
+  r_stack
 }
 
 # 4. Build EVI mean surface for given season
 # ------------------------------------------------------------
  
-build_evi_mean <- function(season, years = years_range) {
+build_evi_year <- function(season, year = target_year) {
  
-  if (season == "dry") {
-    r_list <- map(years, function(yr) {
-      fp <- file.path(evi_folder, paste0("evi_dry_", yr, ".tif"))
-      if (!file.exists(fp)) return(NULL)
-      r <- project(rast(fp), template, method = "bilinear")
-      names(r) <- "evi"
-      r
-    })
+  fp <- if (season == "dry") {
+    file.path(evi_folder, paste0("evi_dry_", year, ".tif"))
   } else {
     # wet season files span year boundaries: evi_wet_(yr-1)_(yr).tif
-    r_list <- map(years, function(yr) {
-      fp <- file.path(evi_folder, paste0("evi_wet_", yr - 1, "_", yr, ".tif"))
-      if (!file.exists(fp)) return(NULL)
-      r <- project(rast(fp), template, method = "bilinear")
-      names(r) <- "evi"
-      r
-    })
+    file.path(evi_folder, paste0("evi_wet_", year - 1, "_", year, ".tif"))
   }
-  r_list <- compact(r_list)
-  r_stack <- rast(r_list)
-  evi_mean <- mean(r_stack, na.rm = TRUE)
-  names(evi_mean) <- "evi"
-  evi_mean
+ 
+  if (!file.exists(fp)) {
+    stop("EVI raster not found for ", season, " ", year, ": ", fp)
+  }
+ 
+  r <- project(rast(fp), template, method = "bilinear")
+  names(r) <- "evi"
+  r
 }
 
 # 5. Build population mean surface across years
 # ------------------------------------------------------------
- 
-build_world_pop_mean <- function(years = years_range) {
+build_world_pop_year <- function(year = target_year) {
   world_pop <- rast(file.path(gee_folder, "worldPop_comb_img_500m.tif"))
   world_pop <- project(world_pop, template, method = "bilinear")
-  world_pop_list <- split(world_pop, 1:nlyr(world_pop))
  
-  layer_idx <- years - 1999  #matches indexing used in the SSF extraction script
-  layer_idx <- layer_idx[layer_idx >= 1 & layer_idx <= length(world_pop_list)]
+  layer_idx <- year - 1999  #matches indexing used in the SSF extraction script
+  if (layer_idx < 1 || layer_idx > nlyr(world_pop)) {
+    stop("No world_pop layer available for year ", year)
+  }
  
-  pop_stack <- rast(world_pop_list[layer_idx])
-  pop_mean <- mean(pop_stack, na.rm = TRUE)
-  names(pop_mean) <- "world_pop"
-  pop_mean
+  pop <- world_pop[[layer_idx]]
+  names(pop) <- "world_pop"
+  pop
 }
 
 # 6. Full covariate stack for one season
 # ------------------------------------------------------------
- 
-build_covariate_stack <- function(season) {
+
+build_covariate_stack <- function(season, year = target_year) {
   static_stack  <- build_static_stack()
   linear_stack  <- build_linear_stack()
-  lc_stack      <- build_lc_dist_mean()
-  evi_stack     <- build_evi_mean(season)
-  pop_stack     <- build_world_pop_mean()
+  lc_stack      <- build_lc_dist_year(year)
+  evi_stack     <- build_evi_year(season, year)
+  pop_stack     <- build_world_pop_year(year)
  
- full_stack <- c(static_stack, linear_stack, lc_stack, evi_stack, pop_stack)
+  full_stack <- c(static_stack, linear_stack, lc_stack, evi_stack, pop_stack)
   full_stack
 }
 
