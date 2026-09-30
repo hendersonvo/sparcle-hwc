@@ -56,7 +56,7 @@ etosha_pts <- ele_trk_extract_etosha |>
 etosha_vect <- vect(etosha_pts, geom = c("x2_", "y2_"), crs = "EPSG:4326")
 
 #Using a conevex hull and buffer to allow for movement just beyond the outermost GPS fix 
-valid_area <- buffer(convHull(etosha_vect), width = 5000)
+valid_area <- buffer(convHull(etosha_vect), width = 50000)
 
 # 2. Build static covariate raster (seaonal)
 # ------------------------------------------------------------
@@ -64,7 +64,7 @@ build_static_stack <- function() {
  
   static_files <- c(
     # CHECK: SSF extraction used "core_dist_rast_500m.tif" (no "_new"). If the two files differ, the betas are being applied to the wrong values. Use the same file as extraction.
-    core_dist  = file.path(gee_folder, "core_dist_rast_500m_new.tif"),
+    core_dist  = file.path(gee_folder, "core_dist_rast_500m.tif"),
     fence_dist = file.path(gee_folder, "fences_dist_rast_500m.tif"),
     road_dist  = file.path(gee_folder, "roads_distance_rast_500m.tif")
   )
@@ -291,4 +291,264 @@ jump[order(-abs(jump$diff)), ]
 global(is.na(cs), "sum")
 ```
 
+```{r}
+# ------------------------------------------------------------
+#Resistance sutface for KAZA wet/dry 
+# ------------------------------------------------------------
+
+library(tidyverse)
+library(terra)
+library(here)
+
+# 0. Configuring
+# ------------------------------------------------------------
+pop_label   <- "kaza"
+target_year <- 2020 #non-static covariates using this single year 
+ 
+gee_folder      <- here("data", "500m_data")
+lc_dist_folder  <- here("data", "ESACCI_LCCS", "lc_dist_2")
+evi_folder      <- here("data", "500m_data", "EVI data")
+model_folder    <- here("outputs")
+out_folder      <- here("outputs", "resistance_surfaces")
+dir.create(out_folder, showWarnings = FALSE, recursive = TRUE)
+ 
+lc_types    <- c("cropland", "grassland", "shrubland", "tree_cover", "urban", "water_rivers")
+wet_months  <- c(1:4, 11:12)
+dry_months  <- c(5:10)
+ 
+crop_extent <- ext(12.5, 25.5, -21.5, -16.5) 
+target_res  <- 0.0045 # 500m in degrees 
+template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
+
+# 1. Load fitted SSF modles
+# ------------------------------------------------------------
+ 
+m0_wet_kaza <- readRDS(here("outputs", "m0_wet_kaza.rds"))
+m0_dry_kaza <- readRDS(here("outputs", "m0_dry_kaza.rds"))
+
+# Define the area where the KAZA SSF is valid to only mask the used area and remove extrapolated pixels 
+library(terra)
+library(dplyr)
+library(tidyr)
+library(here)
+
+# 1. Read both tracking files
+ele_trk_extract_kaza_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
+ele_trk_extract_kaza_wet <- readRDS(here("outputs", "ele_trk_extract_kaza_wet.rds")) # Replace with your second file path
+
+# 2. Extract and combine observed points from both datasets
+combined_pts <- bind_rows(
+  ele_trk_1 |> as.data.frame(),
+  ele_trk_2 |> as.data.frame()
+) |> 
+  filter(case_) |> 
+  select(x2_, y2_) |> 
+  drop_na()
+
+ele_vect <- vect(combined_pts, geom = c("x2_", "y2_"), crs = "EPSG:4326")
+
+# 4. Create the Minimum Convex Polygon (MCP)
+mcp <- convHull(ele_vect)
+valid_area <- buffer(mcp, width = 5000)
+
+# 2. Build static covariate raster (seaonal)
+# ------------------------------------------------------------
+build_static_stack <- function() {
+ 
+  static_files <- c(
+    # CHECK: SSF extraction used "core_dist_rast_500m.tif" (no "_new"). If the two files differ, the betas are being applied to the wrong values. Use the same file as extraction.
+    core_dist  = file.path(gee_folder, "core_dist_rast_500m.tif"),
+    fence_dist = file.path(gee_folder, "fences_dist_rast_500m.tif"),
+    road_dist  = file.path(gee_folder, "roads_distance_rast_500m.tif")
+  )
+ 
+  r_list <- map(static_files, ~ project(rast(.x), template, method = "bilinear"))
+  r_stack <- rast(r_list)
+  names(r_stack) <- names(static_files)
+ 
+  terrain_r <- rast(file.path(gee_folder, "terrain_rast_500m.tif"))
+  terrain_r <- project(terrain_r, template, method = "bilinear")
+  
+  c(r_stack, terrain_r)
+}
+
+#Linear feature stack 
+build_linear_stack <- function() {
+ 
+  linear_types <- c("hydrorivers", "kaza_vet_fences", "roads")
+  linear_folder <- here("data", "Linear_features")
+ 
+  r_list <- map(linear_types, function(feature) {
+    fp <- file.path(linear_folder, paste0(feature, "_linear_500m.tif"))
+    project(rast(fp), template, method = "near")
+  })
+  r_stack <- rast(r_list)
+  names(r_stack) <- paste0(linear_types, "_linear")
+ 
+  r_stack
+}
+
+# 3. Build land-cover distance stack, average across year 
+# ------------------------------------------------------------
+build_lc_dist_year <- function(year = target_year) {
+ 
+  paths <- setNames(
+    file.path(lc_dist_folder, paste0("dist_", lc_types, "_", year, ".tif")),
+    lc_types
+  )
+  paths <- paths[file.exists(paths)]
+ 
+  missing_lc <- setdiff(lc_types, names(paths))
+  if (length(missing_lc) > 0) {
+    warning("Land-cover distance rasters missing for ", year, ": ",
+            paste(missing_lc, collapse = ", "))
+  }
+ 
+  r_list <- map(paths, ~ project(rast(.x), template, method = "bilinear"))
+  r_stack <- rast(r_list)
+  names(r_stack) <- paste0(names(paths), "_dist")
+  r_stack
+}
+
+# 4. Build EVI mean surface for given season
+# ------------------------------------------------------------
+ 
+build_evi_year <- function(season, year = target_year) {
+ 
+  fp <- if (season == "dry") {
+    file.path(evi_folder, paste0("evi_dry_", year, ".tif"))
+  } else {
+    # wet season files span year boundaries: evi_wet_(yr-1)_(yr).tif
+    file.path(evi_folder, paste0("evi_wet_", year - 1, "_", year, ".tif"))
+  }
+ 
+  if (!file.exists(fp)) {
+    stop("EVI raster not found for ", season, " ", year, ": ", fp)
+  }
+ 
+  r <- project(rast(fp), template, method = "bilinear")
+  names(r) <- "evi"
+  r
+}
+
+# 5. Build population mean surface across years
+# ------------------------------------------------------------
+build_world_pop_year <- function(year = target_year) {
+  world_pop <- rast(file.path(gee_folder, "worldPop_comb_img_500m.tif"))
+  world_pop <- project(world_pop, template, method = "bilinear")
+ 
+  layer_idx <- year - 1999  #matches indexing used in the SSF extraction script
+  if (layer_idx < 1 || layer_idx > nlyr(world_pop)) {
+    stop("No world_pop layer available for year ", year)
+  }
+ 
+  pop <- world_pop[[layer_idx]]
+  names(pop) <- "world_pop"
+  pop
+}
+
+# 6. Full covariate stack for one season
+# ------------------------------------------------------------
+
+build_covariate_stack <- function(season, year = target_year) {
+  static_stack  <- build_static_stack()
+  linear_stack  <- build_linear_stack()
+  lc_stack      <- build_lc_dist_year(year)
+  evi_stack     <- build_evi_year(season, year)
+  pop_stack     <- build_world_pop_year(year)
+ 
+  full_stack <- c(static_stack, linear_stack, lc_stack, evi_stack, pop_stack)
+  full_stack
+}
+
+# 7. Predict linear predictor / SSF from model coefficients (REVISED)
+# -----------------------------------------------------------
+
+predict_ssf_surface <- function(model, covariate_stack) {
+ 
+  #fit_clogit() function wraps the model inside '$model', so extract '$model' here to get correct coefficients 
+  betas <- coef(model$model) #pulls out statistical weights calculated by SSF
+  betas <- betas[!is.na(betas)]  # Remove any variables that failed to calculate (ignore NA values) 
+  
+#compare names of varibales in the model against the names of the map layers provided. Creates a list of any required varibales that are missing from the map. If there is something missing, triggers an error and prints what is missing
+  missing_in_stack <- setdiff(names(betas), names(covariate_stack))
+  if (length(missing_in_stack) > 0) {
+    stop("Model covariates missing from raster stack: ",
+         paste(missing_in_stack, collapse = ", "))
+  }
+ 
+  #using name based indexing to prevent the wrong coefficient multiplying by the wrong variable. Retrieves corresponding layer and multiplies that entire layer by its matching scalar weight. 
+  weighted <- lapply(names(betas), function(nm) covariate_stack[[nm]] * betas[[nm]])
+  
+  #sums all the weighted layers into a linear predictor 
+  lp <- sum(rast(weighted))   #linear predictor surface
+  names(lp) <- "linear_predictor"
+  lp
+  
+}
+
+# 8. Linear predictor to resistance surface
+# ------------------------------------------------------------
+
+lp_to_resistance <- function(lp, min_resistance = 1, max_resistance = 100, shape_parameter = 3,
+                             clip = c(0.01, 0.99)) {
+ 
+#Takes 1st percentile and 99th percentile values of preference scores and cuts any below or above this because extreme outliers
+  q <- as.numeric(quantile(values(lp, na.rm = TRUE), probs = clip))
+  lp_c <- clamp(lp, lower = q[1], upper = q[2])
+  
+  # Uses min max normalization to transform preferences into h, a scale running from 0 to 1 (0 = least selected habitat, 1 = most selected habitat)
+  h <- (lp_c - q[1]) / (q[2] - q[1])
+  
+  # Non-linear Exponential Resistance Transformation
+  # As h approaches 1 (high selection), resistance approaches min_resistance 
+  # As h approaches 0 (lower selection), resistance rises toward max_resistance
+  # shape_parameter controls curvature (larger = resistance drops off faster as habitat improves)
+  # the (1 - exp(-c*h)) / (1 - exp(-c)) term is already scaled to 0-1, so resistance hits exactly min/max without a separate rescaling step.
+  resistance <- max_resistance -
+    (max_resistance - min_resistance) *
+    ((1 - exp(-shape_parameter * h)) / (1 - exp(-shape_parameter)))
+  
+  names(resistance) <- "resistance"
+  
+  resistance
+ 
+}
+
+#9. Run 
+# ------------------------------------------------------------
+run_resistance_pipeline <- function(model, season, pop_label, valid_area) {
+  message("Building covariate stack for ", pop_label, "-", season)
+  cov_stack <- build_covariate_stack(season) 
+
+  message("Predicting linear predictor surface")
+  lp <- predict_ssf_surface(model, cov_stack) #Calculate habitat selection 
+  
+  # mask before transforming: the quantile clipping and normalization in lp_to_resistance() should only see pixels the model can be trusted on.
+  message("Masking to area where the SSF is valid")
+  lp <- mask(lp, valid_area)
+  
+  # lp should span a modest range, not tens/hundreds of units
+  print(global(lp, c("min", "max", "mean", "sd"), na.rm = TRUE))
+
+  message("Converting to resistance surface")
+  resistance <- lp_to_resistance(lp)
+
+  out_path <- file.path(out_folder, paste0("resistance_", pop_label, "_", season, ".tif"))
+  writeRaster(resistance, out_path, overwrite = TRUE)
+  message("saved: ", out_path)
+
+  resistance 
+}
+
+#Run
+resistance_kaza_wet <- run_resistance_pipeline(m0_wet_kaza, "wet", pop_label, valid_area)
+resistance_kaza_dry <- run_resistance_pipeline(m0_dry_kaza, "dry", pop_label, valid_area)
+
+#Visualize
+plot(resistance_kaza_wet, main = "KAZA Wet Season Resistance Surface")
+plot(resistance_kaza_dry, main = "KAZA Dry Season Resistance Surface")
+plet(resistance_kaza_wet, col = rev(terrain.colors(100)), tiles = "OpenStreetMap")
+plet(resistance_kaza_dry, col = rev(terrain.colors(100)), tiles = "OpenStreetMap")
+```
 
