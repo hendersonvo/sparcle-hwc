@@ -9,36 +9,6 @@ output: html_document
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ```{r}
-m0_dry <- here("outputs", "m0_dry.rds")
-m0_wet <- here("outputs", "m0_wet.rds")
-
-# load raster stack here
-
-coefs_dry <- coef(m0_dry)
-coefs_wet <- coef(m0_wet)
-
-landscape_coefs_dry <- coefs_dry[c("built_2020", "cropland_2020", "grassland_2020", "shrub_2020", 
-                                   "tree_2020", "water_2020", "core_dist_rast", 
-                                   "rivers_dist_rast", "roads_distance_rast", "fences_dist_rast", 
-                                   "pop_density_2020", "dry_szn_evi_2020", 
-                                   "dry_spei3_fill_na_neg2_2020", "elevation", "slope", "aspect")]
-
-landscape_coefs_wet <- coefs_wet[c("built_2020", "cropland_2020", "grassland_2020", "shrub_2020", 
-                                   "tree_2020", "water_2020", "core_dist_rast", 
-                                   "rivers_dist_rast", "roads_distance_rast", "fences_dist_rast", 
-                                   "pop_density_2020", "wet_szn_evi_2020", "wet_spei3_grid_2020", 
-                                   "elevation", "slope", "aspect")]
-```
-
-```{r}
-# log_odds_dry <- (landscape_coefs_dry[coef] * raster_stack_dry[layer]) + ...
-# log_odds_wet <- (landscape_coefs_wet[coef] * raster_stack_wet[layer]) + ...
-
-# rss_dry <- exp(log_odds_dry)
-# rss_wet <- exp(log_odds_wet)
-```
-
-```{r}
 # ------------------------------------------------------------
 #Resistance sutface for Etosha wet/dry 
 # ------------------------------------------------------------
@@ -69,17 +39,31 @@ template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
 # 1. Load fitted SSF modles
 # ------------------------------------------------------------
-m0_dry <- here("outputs", "m0_etosha_dry.rds")
-m0_wet <- here("outputs", "m0_etosha_wet.rds") 
+ 
+m0_etosha_wet <- readRDS(here("outputs", "m0_etosha_wet.rds"))
+m0_etosha_dry <- readRDS(here("outputs", "m0_etosha_dry.rds"))
 
-#m0_etosha_wet <- readRDS(file.path(model_folder, "m0_etosha_wet.rds"))
-#m0_etosha_dry <- readRDS(file.path(model_folder, "m0_etosha_dry.rds"))
+# Define the area where the Etosha SSF is valid to only mask the used area and remove extrapolated pixels 
+
+ele_trk_extract_etosha <- readRDS(here("outputs", "ele_trk_extract_etosha.rds"))
+
+etosha_pts <- ele_trk_extract_etosha |>
+  as.data.frame() |>
+  filter(case_) |>  # used steps only (not random steps)
+  select(x2_, y2_) |>
+  drop_na()
+
+etosha_vect <- vect(etosha_pts, geom = c("x2_", "y2_"), crs = "EPSG:4326")
+
+#Using a conevex hull and buffer to allow for movement just beyond the outermost GPS fix 
+valid_area <- buffer(convHull(etosha_vect), width = 5000)
 
 # 2. Build static covariate raster (seaonal)
 # ------------------------------------------------------------
 build_static_stack <- function() {
  
   static_files <- c(
+    # CHECK: SSF extraction used "core_dist_rast_500m.tif" (no "_new"). If the two files differ, the betas are being applied to the wrong values. Use the same file as extraction.
     core_dist  = file.path(gee_folder, "core_dist_rast_500m_new.tif"),
     fence_dist = file.path(gee_folder, "fences_dist_rast_500m.tif"),
     road_dist  = file.path(gee_folder, "roads_distance_rast_500m.tif")
@@ -184,27 +168,27 @@ build_covariate_stack <- function(season, year = target_year) {
   full_stack
 }
 
-# 7. Predict linear predictor / SSF from model coefficients
+# 7. Predict linear predictor / SSF from model coefficients (REVISED)
 # -----------------------------------------------------------
 
 predict_ssf_surface <- function(model, covariate_stack) {
  
-  betas <- coef(model)
- 
+  #fit_clogit() function wraps the model inside '$model', so extract '$model' here to get correct coefficients 
+  betas <- coef(model$model) #pulls out statistical weights calculated by SSF
+  betas <- betas[!is.na(betas)]  # Remove any variables that failed to calculate (ignore NA values) 
+  
+#compare names of varibales in the model against the names of the map layers provided. Creates a list of any required varibales that are missing from the map. If there is something missing, triggers an error and prints what is missing
   missing_in_stack <- setdiff(names(betas), names(covariate_stack))
   if (length(missing_in_stack) > 0) {
-    warning("Covariates in model but missing from raster stack: ",
-            paste(missing_in_stack, collapse = ", "),
-            " -- these terms will be dropped from the prediction.")
+    stop("Model covariates missing from raster stack: ",
+         paste(missing_in_stack, collapse = ", "))
   }
  
-  common_names <- intersect(names(betas), names(covariate_stack))
-  stack_sub <- covariate_stack[[common_names]]
-  betas_sub <- betas[common_names]
- 
-  #multiply each layer by its coefficient, then sum across layers
-  weighted <- stack_sub * betas_sub
-  lp <- sum(weighted, na.rm = TRUE)   #linear predictor surface
+  #using name based indexing to prevent the wrong coefficient multiplying by the wrong variable. Retrieves corresponding layer and multiplies that entire layer by its matching scalar weight. 
+  weighted <- lapply(names(betas), function(nm) covariate_stack[[nm]] * betas[[nm]])
+  
+  #sums all the weighted layers into a linear predictor 
+  lp <- sum(rast(weighted))   #linear predictor surface
   names(lp) <- "linear_predictor"
   lp
   
@@ -213,53 +197,66 @@ predict_ssf_surface <- function(model, covariate_stack) {
 # 8. Linear predictor to resistance surface
 # ------------------------------------------------------------
 
-lp_to_resistance <- function(lp, min_resistance = 1, max_resistance = 100) {
+lp_to_resistance <- function(lp, min_resistance = 1, max_resistance = 100, shape_parameter = 3,
+                             clip = c(0.01, 0.99)) {
  
-  w <- exp(lp)  #calculates relative selection strength (w)
- 
-  #normalize selection strength between 0 and 1 
-  w_min <- global(w, "min", na.rm = TRUE)[1, 1]
-  w_max <- global(w, "max", na.rm = TRUE)[1, 1]
-  w_norm <- (w - w_min) / (w_max - w_min)
- 
-  #Method 1: invert high selection strength to low resistance which assumes linear mapping between selection preference (w) and landscape resistance
- # resistance <- min_resistance + (max_resistance - min_resistance) * (1 - w_norm)
- # names(resistance) <- "resistance"
-  #resistance
+#Takes 1st percentile and 99th percentile values of preference scores and cuts any below or above this because extreme outliers
+  q <- as.numeric(quantile(values(lp, na.rm = TRUE), probs = clip))
+  lp_c <- clamp(lp, lower = q[1], upper = q[2])
   
-  # or Method 2:  Non-linear Exponential Resistance Transformation
-  # R = 1 + (max_res - min_res) * exp(-c * w_norm)
-  #As w_norm approaches 1 (high selection), resistance approaches min_resistance 
-  #As w_norm appraoches 0 (lower selection), resistance rises rapidly toward max-resistance 
-  res_raw <- exp(-shape_parameter * w_norm) # shape_parameter keeps curve flatter closer to 0.1 and steeply penalizes non-selected habitats 
-  #Rescale the transformed surace to target [min_resistance, max_resistance]
-  r_min <- global(res_raw, "min", na.rm = TRUE)[1, 1]
-  r_max <- global(res_raw, "max", na.rm = TRUE)[1, 1]
-  resistance <- min_resistance + (max_resistance - min_resistance) * ((res_raw - r_min) / (r_max - r_min))
+  # Uses min max normalization to transform preferences into h, a scale running from 0 to 1 (0 = least selected habitat, 1 = most selected habitat)
+  h <- (lp_c - q[1]) / (q[2] - q[1])
+  
+  # Non-linear Exponential Resistance Transformation
+  # As h approaches 1 (high selection), resistance approaches min_resistance 
+  # As h approaches 0 (lower selection), resistance rises toward max_resistance
+  # shape_parameter controls curvature (larger = resistance drops off faster as habitat improves)
+  # the (1 - exp(-c*h)) / (1 - exp(-c)) term is already scaled to 0-1, so resistance hits exactly min/max without a separate rescaling step.
+  resistance <- max_resistance -
+    (max_resistance - min_resistance) *
+    ((1 - exp(-shape_parameter * h)) / (1 - exp(-shape_parameter)))
+  
   names(resistance) <- "resistance"
   
-  return(resistance)
+  resistance
  
 }
 
 #9. Run 
 # ------------------------------------------------------------
-run_resistance_pipeline <- function(model, season, pop_label) {
-  message ("Building covariate stack for ", pop_label, "-", season,)
-  cov_stack <- build_covariate_stack(season)
+run_resistance_pipeline <- function(model, season, pop_label, valid_area) {
+  message("Building covariate stack for ", pop_label, "-", season)
+  cov_stack <- build_covariate_stack(season) 
+
+  message("Predicting linear predictor surface")
+  lp <- predict_ssf_surface(model, cov_stack) #Calculate habitat selection 
   
-  message ("Predicting linear predictor surface")
-  lp <- predict_ssf_surface(model, cov_stack)
+  # WHY mask BEFORE transforming: the quantile clipping and normalization in
+  # lp_to_resistance() should only see pixels the model can be trusted on.
+  message("Masking to area where the SSF is valid")
+  lp <- mask(lp, valid_area)
   
- message("Converting to resistance surface") 
+  # Quick diagnostic: lp should span a modest range, not tens/hundreds of units
+  print(global(lp, c("min", "max", "mean", "sd"), na.rm = TRUE))
+
+  message("Converting to resistance surface")
   resistance <- lp_to_resistance(lp)
-  
+
   out_path <- file.path(out_folder, paste0("resistance_", pop_label, "_", season, ".tif"))
   writeRaster(resistance, out_path, overwrite = TRUE)
-  message("saved", out_path)
+  message("saved: ", out_path)
+
+  resistance 
 }
 
+#Run
+resistance_etosha_wet <- run_resistance_pipeline(m0_etosha_wet, "wet", pop_label, valid_area)
+resistance_etosha_dry <- run_resistance_pipeline(m0_etosha_dry, "dry", pop_label, valid_area)
 
+#Visualize
+plot(resistance_etosha_wet, main = "Etosha Wet Season Resistance Surface")
+plot(resistance_etosha_dry, main = "Etosha Dry Season Resistance Surface")
+plet(resistance_etosha_wet, col = rev(terrain.colors(100)), tiles = "OpenStreetMap")
 ```
 
 ```{r}
@@ -269,6 +266,30 @@ names(coef(m0_etosha_dry))
 
 # Check raster stack layer names:
 names(cov_stack)
+```
+
+```{r}
+cov_stack <- build_covariate_stack("wet")
+betas <- coef(m0_etosha_wet$model); betas <- betas[!is.na(betas)]
+cs <- mask(cov_stack[[names(betas)]], valid_area)
+
+# per-term contribution (beta * value), so you can see which one steps at ~14.9
+contrib <- rast(lapply(names(betas), function(nm) cs[[nm]] * betas[[nm]]))
+names(contrib) <- names(betas)
+plot(contrib, nc = 4)          # look for the layer with the vertical edge
+
+# west vs east of the seam, ranked by size of the jump
+w <- ext(14.3, 14.8, -19.2, -18.4); e <- ext(15.1, 15.6, -19.2, -18.4)
+jump <- data.frame(
+  term = names(betas),
+  west = global(crop(contrib, w), "mean", na.rm = TRUE)[, 1],
+  east = global(crop(contrib, e), "mean", na.rm = TRUE)[, 1]
+)
+jump$diff <- jump$east - jump$west
+jump[order(-abs(jump$diff)), ]
+
+# which layer is NA over the pan
+global(is.na(cs), "sum")
 ```
 
 
