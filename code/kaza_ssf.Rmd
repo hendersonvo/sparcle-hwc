@@ -305,7 +305,7 @@ extract_world_pop <- readRDS(here("outputs", "extract_world_pop.rds"))
  # extract_linear()
 
 # pull saved extraction 
-ele_trk_extract_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
+ele_trk_extract_dry <- readRDS(here("data", "outputs", "ele_trk_extract_kaza_dry.rds"))
 ele_trk_extract_wet <- readRDS(here("outputs", "ele_trk_extract_kaza_wet.rds"))
   
 # update to make step_id unique to each elephant before fitting
