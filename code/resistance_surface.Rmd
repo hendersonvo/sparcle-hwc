@@ -231,12 +231,11 @@ run_resistance_pipeline <- function(model, season, pop_label, valid_area) {
   message("Predicting linear predictor surface")
   lp <- predict_ssf_surface(model, cov_stack) #Calculate habitat selection 
   
-  # WHY mask BEFORE transforming: the quantile clipping and normalization in
-  # lp_to_resistance() should only see pixels the model can be trusted on.
+  # mask before transforming: the quantile clipping and normalization in lp_to_resistance() should only see pixels the model can be trusted on.
   message("Masking to area where the SSF is valid")
   lp <- mask(lp, valid_area)
   
-  # Quick diagnostic: lp should span a modest range, not tens/hundreds of units
+  # lp should span a modest range, not tens/hundreds of units
   print(global(lp, c("min", "max", "mean", "sd"), na.rm = TRUE))
 
   message("Converting to resistance surface")
