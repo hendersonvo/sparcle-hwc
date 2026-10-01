@@ -326,14 +326,10 @@ template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 m0_wet_kaza <- readRDS(here("outputs", "m0_kaza_wet_coefonly.rds"))
 m0_dry_kaza <- readRDS(here("outputs", "m0_kaza_dry_coefonly.rds"))
 
-#m0_wet_kaza <- readRDS(here("outputs", "m0_wet_kaza.rds"))
-#m0_dry_kaza <- readRDS(here("outputs", "m0_dry_kaza.rds"))
 
 # Define the area where the KAZA SSF is valid to only mask the used area and remove extrapolated pixels 
-#library(terra)
-#library(dplyr)
 #library(tidyr)
-#library(here)
+
 
 # 1. Read both tracking files
 #ele_trk_extract_kaza_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
