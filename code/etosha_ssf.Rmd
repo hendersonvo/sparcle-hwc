@@ -100,7 +100,7 @@ resample_trk <- function(trk) {
   # for every xyt in data, resample and create steps by burst, and store in 'steps' column
   mutate(steps = map(data, function(x) {
     x |>
-      track_resample(rate = hours(6), tolerance = minutes(15)) |>
+      track_resample(rate = hours(1), tolerance = minutes(15)) |>
       steps_by_burst()
   })) |>
   # select id and steps column

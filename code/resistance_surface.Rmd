@@ -322,34 +322,38 @@ template    <- rast(crop_extent, resolution = target_res, crs = "EPSG:4326")
 
 # 1. Load fitted SSF modles
 # ------------------------------------------------------------
- 
-m0_wet_kaza <- readRDS(here("outputs", "m0_wet_kaza.rds"))
-m0_dry_kaza <- readRDS(here("outputs", "m0_dry_kaza.rds"))
+#load only covariates
+m0_wet_kaza <- readRDS(here("outputs", "m0_kaza_wet_coefonly.rds"))
+m0_dry_kaza <- readRDS(here("outputs", "m0_kaza_dry_coefonly.rds"))
+
+#m0_wet_kaza <- readRDS(here("outputs", "m0_wet_kaza.rds"))
+#m0_dry_kaza <- readRDS(here("outputs", "m0_dry_kaza.rds"))
 
 # Define the area where the KAZA SSF is valid to only mask the used area and remove extrapolated pixels 
-library(terra)
-library(dplyr)
-library(tidyr)
-library(here)
+#library(terra)
+#library(dplyr)
+#library(tidyr)
+#library(here)
 
 # 1. Read both tracking files
-ele_trk_extract_kaza_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
-ele_trk_extract_kaza_wet <- readRDS(here("outputs", "ele_trk_extract_kaza_wet.rds")) # Replace with your second file path
+#ele_trk_extract_kaza_dry <- readRDS(here("outputs", "ele_trk_extract_kaza_dry.rds"))
+#ele_trk_extract_kaza_wet <- readRDS(here("outputs", "ele_trk_extract_kaza_wet.rds")) # Replace with your second file path
 
 # 2. Extract and combine observed points from both datasets
-combined_pts <- bind_rows(
-  ele_trk_1 |> as.data.frame(),
-  ele_trk_2 |> as.data.frame()
-) |> 
-  filter(case_) |> 
-  select(x2_, y2_) |> 
-  drop_na()
+#combined_pts <- bind_rows(
+#  ele_trk_1 |> as.data.frame(),
+#  ele_trk_2 |> as.data.frame()
+#) |> 
+#  filter(case_) |> 
+#  select(x2_, y2_) |> 
+#  drop_na()
 
-ele_vect <- vect(combined_pts, geom = c("x2_", "y2_"), crs = "EPSG:4326")
+#ele_vect <- vect(combined_pts, geom = c("x2_", "y2_"), crs = "EPSG:4326")
 
 # 4. Create the Minimum Convex Polygon (MCP)
-mcp <- convHull(ele_vect)
-valid_area <- buffer(mcp, width = 5000)
+valid_area_kaza <- vect(here("outputs", "kaza_valid_area.gpkg"))
+#mcp <- convHull(ele_vect)
+#valid_area <- buffer(mcp, width = 5000)
 
 # 2. Build static covariate raster (seaonal)
 # ------------------------------------------------------------
@@ -467,7 +471,9 @@ build_covariate_stack <- function(season, year = target_year) {
 predict_ssf_surface <- function(model, covariate_stack) {
  
   #fit_clogit() function wraps the model inside '$model', so extract '$model' here to get correct coefficients 
-  betas <- coef(model$model) #pulls out statistical weights calculated by SSF
+  #betas <- coef(model$model) #pulls out statistical weights calculated by SSF
+  #replaced since there is no saved model
+  betas <- if (!is.null(model$model)) coef(model$model) else coef(model)
   betas <- betas[!is.na(betas)]  # Remove any variables that failed to calculate (ignore NA values) 
   
 #compare names of varibales in the model against the names of the map layers provided. Creates a list of any required varibales that are missing from the map. If there is something missing, triggers an error and prints what is missing
@@ -542,8 +548,8 @@ run_resistance_pipeline <- function(model, season, pop_label, valid_area) {
 }
 
 #Run
-resistance_kaza_wet <- run_resistance_pipeline(m0_wet_kaza, "wet", pop_label, valid_area)
-resistance_kaza_dry <- run_resistance_pipeline(m0_dry_kaza, "dry", pop_label, valid_area)
+resistance_kaza_wet <- run_resistance_pipeline(m0_wet_kaza, "wet", pop_label, valid_area_kaza)
+resistance_kaza_dry <- run_resistance_pipeline(m0_dry_kaza, "dry", pop_label, valid_area_kaza)
 
 #Visualize
 plot(resistance_kaza_wet, main = "KAZA Wet Season Resistance Surface")
